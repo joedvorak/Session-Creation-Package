@@ -67,7 +67,7 @@ class SessionCreatorApp(tk.Tk):
 
         # --- Window Configuration ---
         self.title("Presentation Session Organizer")
-        self.geometry("750x850")
+        self.geometry("1000x800")  # Wider but shorter
         self.resizable(True, True)
 
         # --- Style Configuration ---
@@ -102,19 +102,25 @@ class SessionCreatorApp(tk.Tk):
         main_frame = ttk.Frame(self, padding="10 10 10 10")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
+        # Configure main frame columns
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+
         # --- Widget Creation ---
         self._create_widgets(main_frame)
         self._update_api_key_field_state()
 
     def _create_widgets(self, parent_frame):
-        """Creates and lays out all the widgets in the application."""
+        """Creates and lays out all the widgets in a two-column layout."""
+
+        # === LEFT COLUMN: Session Creation ===
+        left_frame = ttk.Frame(parent_frame)
+        left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
 
         # --- File Selection Section ---
-        file_frame = ttk.Frame(parent_frame)
+        file_frame = ttk.LabelFrame(left_frame, text="1. File Selection", padding="10")
         file_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Label(file_frame, text="Select the presentation Excel file:").pack(anchor='w')
-        
         entry_frame = ttk.Frame(file_frame)
         entry_frame.pack(fill=tk.X, expand=True)
         
@@ -124,50 +130,38 @@ class SessionCreatorApp(tk.Tk):
         browse_button = ttk.Button(entry_frame, text="Browse...", command=self.browse_for_file)
         browse_button.pack(side=tk.LEFT, padx=(5, 0))
 
-        # --- Column Selection Section (initially hidden) ---
-        ttk.Separator(parent_frame).pack(fill=tk.X, pady=10)
-        
-        self.column_frame = ttk.Frame(parent_frame)
+        # --- Column Selection Section (always visible) ---
+        self.column_frame = ttk.LabelFrame(left_frame, text="2. Column Selection", padding="10")
         self.column_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.column_label = ttk.Label(self.column_frame, text="Select Columns:")
-        self.column_label.pack(anchor='w')
         
         # Title column selection
         title_frame = ttk.Frame(self.column_frame)
         title_frame.pack(fill=tk.X, pady=2)
         ttk.Label(title_frame, text="Title Column:", width=15).pack(side=tk.LEFT)
-        self.title_combo = ttk.Combobox(title_frame, textvariable=self.title_column_var, state='readonly', width=40)
-        self.title_combo.pack(side=tk.LEFT, padx=(5, 0))
+        self.title_combo = ttk.Combobox(title_frame, textvariable=self.title_column_var, state='disabled')
+        self.title_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
         
         # Abstract column selection
         abstract_frame = ttk.Frame(self.column_frame)
         abstract_frame.pack(fill=tk.X, pady=2)
         ttk.Label(abstract_frame, text="Abstract Column:", width=15).pack(side=tk.LEFT)
-        self.abstract_combo = ttk.Combobox(abstract_frame, textvariable=self.abstract_column_var, state='readonly', width=40)
-        self.abstract_combo.pack(side=tk.LEFT, padx=(5, 0))
+        self.abstract_combo = ttk.Combobox(abstract_frame, textvariable=self.abstract_column_var, state='disabled')
+        self.abstract_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
         
         # ID column selection
         id_frame = ttk.Frame(self.column_frame)
         id_frame.pack(fill=tk.X, pady=2)
         ttk.Label(id_frame, text="ID Column:", width=15).pack(side=tk.LEFT)
-        self.id_combo = ttk.Combobox(id_frame, textvariable=self.id_column_var, state='readonly', width=40)
-        self.id_combo.pack(side=tk.LEFT, padx=(5, 0))
+        self.id_combo = ttk.Combobox(id_frame, textvariable=self.id_column_var, state='disabled')
+        self.id_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
         
-        # Preview button
-        self.preview_button = ttk.Button(self.column_frame, text="Preview Selected Columns", command=self.preview_columns)
+        # Preview button (initially disabled)
+        self.preview_button = ttk.Button(self.column_frame, text="Preview Selected Columns", command=self.preview_columns, state='disabled')
         self.preview_button.pack(pady=5)
         
-        # Initially hide column selection
-        self._hide_column_selection()
-
         # --- Embedding Model Selection ---
-        ttk.Separator(parent_frame).pack(fill=tk.X, pady=10)
-        
-        embedding_frame = ttk.Frame(parent_frame)
+        embedding_frame = ttk.LabelFrame(left_frame, text="3. Embedding Model", padding="10")
         embedding_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(embedding_frame, text="Select Embedding Model:").pack(anchor='w')
         
         embedding_selection_frame = ttk.Frame(embedding_frame)
         embedding_selection_frame.pack(fill=tk.X, pady=2)
@@ -181,29 +175,38 @@ class SessionCreatorApp(tk.Tk):
                 "sentence-transformers/paraphrase-MiniLM-L6-v2",
                 "jxm/cde-small-v1"
             ],
-            state='readonly',
-            width=50
+            state='readonly'
         )
-        self.embedding_combo.pack(side=tk.LEFT, padx=(0, 5))
+        self.embedding_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
         load_model_button = ttk.Button(embedding_selection_frame, text="Load Model", command=self.load_embedding_model)
         load_model_button.pack(side=tk.LEFT)
 
         # --- Run Session Creation Button ---
-        ttk.Separator(parent_frame).pack(fill=tk.X, pady=10)
-        
-        run_frame = ttk.Frame(parent_frame)
+        run_frame = ttk.LabelFrame(left_frame, text="4. Session Creation", padding="10")
         run_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.run_button = ttk.Button(run_frame, text="Run Session Creation", command=self.run_process)
-        self.run_button.pack(anchor='w')
+        self.run_button.pack(fill=tk.X, pady=(0, 5))
+        
+        # Save button at bottom of session creation
+        self.save_button = ttk.Button(run_frame, text="Save Session Data", command=self.save_session_data, state='disabled')
+        self.save_button.pack(fill=tk.X)
+
+        # === RIGHT COLUMN: Title Generation ===
+        right_frame = ttk.Frame(parent_frame)
+        right_frame.grid(row=0, column=1, sticky='nsew', padx=(5, 0))
+
+        # --- Load Data Section ---
+        load_frame = ttk.LabelFrame(right_frame, text="5. Load Existing Data", padding="10")
+        load_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.load_button = ttk.Button(load_frame, text="Load Session Data", command=self.load_session_data)
+        self.load_button.pack(fill=tk.X)
 
         # --- LLM Choice Section ---
-        ttk.Separator(parent_frame).pack(fill=tk.X, pady=10)
-        
-        llm_frame = ttk.Frame(parent_frame)
+        llm_frame = ttk.LabelFrame(right_frame, text="6. LLM Configuration", padding="10")
         llm_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(llm_frame, text="Choose LLM Method for Title Generation:").pack(anchor='w')
 
         # Radio buttons and API Key field
         radio_online = ttk.Radiobutton(
@@ -213,11 +216,11 @@ class SessionCreatorApp(tk.Tk):
             value="online", 
             command=self._update_api_key_field_state
         )
-        radio_online.pack(anchor='w', padx=10)
+        radio_online.pack(anchor='w', pady=2)
 
         # Frame to hold the API key label and entry
-        self.api_key_frame = ttk.Frame(llm_frame, padding=(20, 0, 0, 0))
-        self.api_key_frame.pack(fill=tk.X)
+        self.api_key_frame = ttk.Frame(llm_frame)
+        self.api_key_frame.pack(fill=tk.X, padx=20, pady=2)
         ttk.Label(self.api_key_frame, text="API Key:").pack(side=tk.LEFT)
         self.api_key_entry = ttk.Entry(self.api_key_frame, textvariable=self.api_key_var, show="*")
         self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
@@ -229,70 +232,85 @@ class SessionCreatorApp(tk.Tk):
             value="local", 
             command=self._update_api_key_field_state
         )
-        radio_local.pack(anchor='w', padx=10)
+        radio_local.pack(anchor='w', pady=2)
 
-        # --- Save/Load Section ---
-        ttk.Separator(parent_frame).pack(fill=tk.X, pady=10)
+        # --- Title Generation Section ---
+        titles_frame = ttk.LabelFrame(right_frame, text="7. Generate Session Names", padding="10")
+        titles_frame.pack(fill=tk.X, pady=(0, 10))
         
-        saveload_frame = ttk.Frame(parent_frame)
-        saveload_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(saveload_frame, text="Session Data Management:").pack(anchor='w')
-        
-        saveload_buttons = ttk.Frame(saveload_frame)
-        saveload_buttons.pack(fill=tk.X, pady=2)
-        
-        self.save_button = ttk.Button(saveload_buttons, text="Save Session Data", command=self.save_session_data, state='disabled')
-        self.save_button.pack(side=tk.LEFT, padx=(0, 5))
-        
-        self.load_button = ttk.Button(saveload_buttons, text="Load Session Data", command=self.load_session_data)
-        self.load_button.pack(side=tk.LEFT, padx=(0, 5))
-        
-        self.generate_titles_button = ttk.Button(saveload_buttons, text="Generate Titles Only", command=self.generate_titles_only, state='disabled')
-        self.generate_titles_button.pack(side=tk.LEFT)
+        self.generate_titles_button = ttk.Button(titles_frame, text="Generate Session Titles", command=self.generate_titles_only, state='disabled')
+        self.generate_titles_button.pack(fill=tk.X)
 
-        # --- Exit Button ---
-        ttk.Separator(parent_frame).pack(fill=tk.X, pady=10)
-
-        exit_button = ttk.Button(parent_frame, text="Exit", command=self.destroy)
-        exit_button.pack(anchor='w')
+        # === BOTTOM SECTION: Progress and Output (spans both columns) ===
+        bottom_frame = ttk.Frame(parent_frame)
+        bottom_frame.grid(row=1, column=0, columnspan=2, sticky='nsew', pady=(10, 0))
         
+        parent_frame.rowconfigure(1, weight=1)  # Make bottom section expandable
+
         # --- Progress Section ---
-        progress_frame = ttk.Frame(parent_frame)
-        progress_frame.pack(fill=tk.X, pady=(5, 5))
+        progress_frame = ttk.LabelFrame(bottom_frame, text="Progress", padding="10")
+        progress_frame.pack(fill=tk.X, pady=(0, 5))
         
-        # Main progress bar for overall process
-        ttk.Label(progress_frame, text="Overall Progress:").pack(anchor='w')
+        # Create two-column layout for progress bars
+        progress_grid = ttk.Frame(progress_frame)
+        progress_grid.pack(fill=tk.X)
+        progress_grid.columnconfigure(0, weight=1)
+        progress_grid.columnconfigure(1, weight=1)
+        
+        # Overall progress
+        overall_frame = ttk.Frame(progress_grid)
+        overall_frame.grid(row=0, column=0, sticky='ew', padx=(0, 5))
+        ttk.Label(overall_frame, text="Overall Progress:").pack(anchor='w')
         self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, mode='determinate')
-        self.progress_bar.pack(fill=tk.X, pady=(0, 5))
+        self.progress_bar = ttk.Progressbar(overall_frame, variable=self.progress_var, mode='determinate')
+        self.progress_bar.pack(fill=tk.X)
         
-        # Sub-progress bar for current step (like embeddings)
-        ttk.Label(progress_frame, text="Current Step:").pack(anchor='w')
+        # Current step progress
+        step_frame = ttk.Frame(progress_grid)
+        step_frame.grid(row=0, column=1, sticky='ew', padx=(5, 0))
+        ttk.Label(step_frame, text="Current Step:").pack(anchor='w')
         self.sub_progress_var = tk.DoubleVar()
-        self.sub_progress_bar = ttk.Progressbar(progress_frame, variable=self.sub_progress_var, mode='determinate')
-        self.sub_progress_bar.pack(fill=tk.X, pady=(0, 5))
+        self.sub_progress_bar = ttk.Progressbar(step_frame, variable=self.sub_progress_var, mode='determinate')
+        self.sub_progress_bar.pack(fill=tk.X)
         
+        # Progress label
         self.progress_label = ttk.Label(progress_frame, text="Ready")
-        self.progress_label.pack(anchor='w')
+        self.progress_label.pack(anchor='w', pady=(5, 0))
+
+        # --- Output/Log Area ---
+        output_frame = ttk.LabelFrame(bottom_frame, text="Progress Log", padding="10")
+        output_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
         
-        # --- Output/Progress Area ---
-        ttk.Label(parent_frame, text="Progress Log:").pack(anchor='w')
-        self.output_text = scrolledtext.ScrolledText(parent_frame, height=10, state='disabled', wrap=tk.WORD)
+        self.output_text = scrolledtext.ScrolledText(output_frame, height=8, state='disabled', wrap=tk.WORD)
         self.output_text.pack(fill=tk.BOTH, expand=True)
 
+        # --- Exit Button ---
+        exit_frame = ttk.Frame(bottom_frame)
+        exit_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        exit_button = ttk.Button(exit_frame, text="Exit", command=self.destroy)
+        exit_button.pack(side=tk.RIGHT)
+
     def _hide_column_selection(self):
-        """Hide the column selection widgets."""
-        for widget in self.column_frame.winfo_children():
-            widget.pack_forget()
+        """Disable column selection widgets and clear their values."""
+        self.title_combo['values'] = []
+        self.abstract_combo['values'] = []
+        self.id_combo['values'] = []
+        self.title_combo.config(state='disabled')
+        self.abstract_combo.config(state='disabled')
+        self.id_combo.config(state='disabled')
+        self.preview_button.config(state='disabled')
+        # Clear any selected values
+        self.title_column_var.set('')
+        self.abstract_column_var.set('')
+        self.id_column_var.set('')
 
     def _show_column_selection(self):
-        """Show the column selection widgets."""
-        self.column_label.pack(anchor='w')
-        for widget in self.column_frame.winfo_children():
-            if widget != self.column_label:
-                widget.pack(fill=tk.X, pady=2)
-        self.preview_button.pack(pady=5)
+        """Enable column selection widgets."""
+        self.title_combo.config(state='readonly')
+        self.abstract_combo.config(state='readonly')
+        self.id_combo.config(state='readonly')
+        self.preview_button.config(state='normal')
 
     def browse_for_file(self):
         """Opens a file dialog to select an Excel file."""
@@ -319,7 +337,7 @@ class SessionCreatorApp(tk.Tk):
             self.abstract_combo['values'] = self.columns_list
             self.id_combo['values'] = self.columns_list
             
-            # Show column selection section
+            # Enable column selection section
             self._show_column_selection()
             
         except Exception as e:

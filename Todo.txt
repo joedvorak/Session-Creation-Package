@@ -1,0 +1,8 @@
+Todo
+
+Change the titles on the spreadsheet column before saving.
+Let them select the spreadsheet names so that it doesn't always overwrite.
+Clarify the save and load. It is the pickle files not the spreadsheets. Sessioning Data vs. Look at spreadsheets?
+Add committee assignment section.
+
+Then hybrid committees...

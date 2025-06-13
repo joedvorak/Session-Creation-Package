@@ -1155,8 +1155,7 @@ def generate_session_titles_and_keywords(
         )
     else:
         raise ValueError(f"Unsupported model name: {model_name}")
-    
-# You can also add error handling and validation
+
 def find_most_similar_committees_by_presentations(
     df_sessions,
     df_presentation_embeddings,
