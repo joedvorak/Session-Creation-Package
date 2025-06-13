@@ -23,3 +23,7 @@ __pycache__/
 *.csv
 *.xlsx
 *.json
+
+# Presentation Data
+df_presentations.pkl
+

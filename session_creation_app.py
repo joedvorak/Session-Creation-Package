@@ -11,15 +11,55 @@ import io
 from contextlib import redirect_stdout, redirect_stderr
 
 class ProgressCapture(io.StringIO):
-    """Capture progress output and send to GUI."""
-    def __init__(self, log_callback):
+    """Capture progress output and update progress bar."""
+    def __init__(self, log_callback, progress_callback):
         super().__init__()
         self.log_callback = log_callback
+        self.progress_callback = progress_callback
         
     def write(self, text):
-        if text.strip():  # Only log non-empty lines
-            self.log_callback(text.strip())
+        if text.strip():
+            text_stripped = text.strip()
+            
+            # Check if this is a progress bar update
+            if self._is_progress_bar_update(text_stripped):
+                # Extract progress percentage and update progress bar
+                progress_percent = self._extract_progress_percentage(text_stripped)
+                if progress_percent is not None:
+                    self.progress_callback(progress_percent)
+                # Don't log progress bars to keep output clean
+            else:
+                # Log non-progress messages normally
+                self.log_callback(text_stripped)
+        
         return super().write(text)
+    
+    def _is_progress_bar_update(self, text):
+        """Check if the text is a progress bar update."""
+        progress_indicators = [
+            "Batches:",
+            "%|",
+            "it/s",
+            "[00:",
+            "Downloading",
+        ]
+        return any(indicator in text for indicator in progress_indicators)
+    
+    def _extract_progress_percentage(self, text):
+        """Extract percentage from progress bar text."""
+        try:
+            # Look for patterns like "Batches:  47%|" or "47%|"
+            if "%" in text and "|" in text:
+                # Find the percentage value before the | symbol
+                percent_part = text.split("%|")[0]
+                # Extract the last number before %
+                import re
+                numbers = re.findall(r'\d+', percent_part)
+                if numbers:
+                    return int(numbers[-1])
+        except (ValueError, IndexError):
+            pass
+        return None
 
 class SessionCreatorApp(tk.Tk):
     def __init__(self):
@@ -217,12 +257,23 @@ class SessionCreatorApp(tk.Tk):
         exit_button = ttk.Button(parent_frame, text="Exit", command=self.destroy)
         exit_button.pack(anchor='w')
         
-        # --- Progress Bar ---
-        self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(parent_frame, variable=self.progress_var, mode='determinate')
-        self.progress_bar.pack(fill=tk.X, pady=(5, 5))
+        # --- Progress Section ---
+        progress_frame = ttk.Frame(parent_frame)
+        progress_frame.pack(fill=tk.X, pady=(5, 5))
         
-        self.progress_label = ttk.Label(parent_frame, text="Ready")
+        # Main progress bar for overall process
+        ttk.Label(progress_frame, text="Overall Progress:").pack(anchor='w')
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, mode='determinate')
+        self.progress_bar.pack(fill=tk.X, pady=(0, 5))
+        
+        # Sub-progress bar for current step (like embeddings)
+        ttk.Label(progress_frame, text="Current Step:").pack(anchor='w')
+        self.sub_progress_var = tk.DoubleVar()
+        self.sub_progress_bar = ttk.Progressbar(progress_frame, variable=self.sub_progress_var, mode='determinate')
+        self.sub_progress_bar.pack(fill=tk.X, pady=(0, 5))
+        
+        self.progress_label = ttk.Label(progress_frame, text="Ready")
         self.progress_label.pack(anchor='w')
         
         # --- Output/Progress Area ---
@@ -319,16 +370,53 @@ class SessionCreatorApp(tk.Tk):
             self.api_key_var.set("")
 
     def update_progress(self, value, text=""):
-        """Update progress bar and label."""
+        """Update main progress bar and label."""
         self.progress_var.set(value)
         if text:
             self.progress_label.config(text=text)
+        self.update_idletasks()
+
+    def update_sub_progress(self, value):
+        """Update sub-progress bar for current step."""
+        self.sub_progress_var.set(value)
+        self.update_idletasks()
+
+    def reset_sub_progress(self):
+        """Reset sub-progress bar."""
+        self.sub_progress_var.set(0)
         self.update_idletasks()
 
     def log_message(self, message):
         """Prints a message to the output text area."""
         self.output_text.config(state='normal')
         self.output_text.insert(tk.END, message + "\n")
+        self.output_text.config(state='disabled')
+        self.output_text.see(tk.END)
+        self.update_idletasks()
+
+    def update_last_line(self, message):
+        """Update the last line in the output text area (for progress bars)."""
+        self.output_text.config(state='normal')
+        
+        # Get current content and split into lines
+        current_content = self.output_text.get("1.0", tk.END)
+        lines = current_content.split('\n')
+        
+        # If there are lines and the last line is not empty, replace it
+        if len(lines) > 1:  # Always has at least one empty line at the end
+            # Remove the last empty line and update the previous line
+            lines = lines[:-1]  # Remove the last empty element
+            if lines:
+                lines[-1] = message
+            else:
+                lines = [message]
+        else:
+            lines = [message]
+        
+        # Replace content
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.insert("1.0", '\n'.join(lines) + '\n')
+        
         self.output_text.config(state='disabled')
         self.output_text.see(tk.END)
         self.update_idletasks()
@@ -343,11 +431,12 @@ class SessionCreatorApp(tk.Tk):
         def load_model():
             try:
                 self.update_progress(0, "Loading embedding model...")
+                self.reset_sub_progress()
                 self.log_message(f"Loading embedding model: {model_name}")
                 self.log_message("This may take a few minutes for the first time...")
                 
-                # Capture progress from SentenceTransformer
-                progress_capture = ProgressCapture(self.log_message)
+                # Capture progress from SentenceTransformer with progress bar updates
+                progress_capture = ProgressCapture(self.log_message, self.update_sub_progress)
                 with redirect_stdout(progress_capture), redirect_stderr(progress_capture):
                     self.embedding_model = SentenceTransformer(model_name, trust_remote_code=True)
                 
@@ -359,11 +448,13 @@ class SessionCreatorApp(tk.Tk):
                     self.log_message(f"✓ Model loaded successfully: {model_name}")
                 
                 self.update_progress(100, "Model loaded successfully")
+                self.update_sub_progress(100)
                     
             except Exception as e:
                 self.log_message(f"✗ Error loading model: {str(e)}")
                 self.embedding_model = None
                 self.update_progress(0, "Model loading failed")
+                self.reset_sub_progress()
         
         # Run model loading in a separate thread
         thread = threading.Thread(target=load_model)
@@ -517,6 +608,7 @@ class SessionCreatorApp(tk.Tk):
                 
                 # Step 1: Load presentations
                 self.update_progress(10, "Loading presentations...")
+                self.reset_sub_progress()
                 self.log_message("Step 1: Loading presentations...")
                 df, title_column, abstract_column, abstract_id_column, topic_column = session_organizer.load_presentations(
                     filepath,
@@ -526,32 +618,39 @@ class SessionCreatorApp(tk.Tk):
                 )
                 self.log_message(f"✓ Loaded {len(df)} presentations")
                 
-                # Step 2: Create embeddings with progress capture
+                # Step 2: Create embeddings with progress bar updates
                 self.update_progress(20, "Creating embeddings...")
+                self.reset_sub_progress()
                 self.log_message("Step 2: Creating embeddings...")
                 
-                progress_capture = ProgressCapture(self.log_message)
+                progress_capture = ProgressCapture(self.log_message, self.update_sub_progress)
                 with redirect_stdout(progress_capture), redirect_stderr(progress_capture):
                     df_presentation_embeddings = session_organizer.embed_documents(df, topic_column, self.embedding_model)
                 
                 self.log_message(f"✓ Created embeddings with shape: {df_presentation_embeddings.shape}")
+                self.update_sub_progress(100)
                 
                 # Step 3: Calculate similarity matrix
                 self.update_progress(40, "Calculating similarity matrix...")
+                self.reset_sub_progress()
                 self.log_message("Step 3: Calculating similarity matrix...")
                 df_presentation_similarities = session_organizer.calculate_similarity_matrix(df_presentation_embeddings, df, self.embedding_model)
                 self.log_message(f"✓ Calculated similarity matrix with shape: {df_presentation_similarities.shape}")
+                self.update_sub_progress(100)
                 
                 # Step 4: Remove duplicates
                 self.update_progress(50, "Removing duplicates...")
+                self.reset_sub_progress()
                 self.log_message("Step 4: Removing near-duplicates...")
                 df, df_presentation_similarities, df_presentation_embeddings = session_organizer.remove_duplicates(
                     df, df_presentation_similarities, df_presentation_embeddings, threshold=0.99
                 )
                 self.log_message(f"✓ Final dataset: {len(df)} presentations")
+                self.update_sub_progress(100)
                 
                 # Step 5: Create sessions
                 self.update_progress(60, "Creating sessions...")
+                self.reset_sub_progress()
                 self.log_message("Step 5: Creating sessions...")
                 df, df_sessions, labels, metadata = session_organizer.create_sessions(
                     df, df_presentation_similarities, df_presentation_embeddings, 
@@ -561,17 +660,21 @@ class SessionCreatorApp(tk.Tk):
                 self.log_message(f"✓ Created {metadata['n_clusters']} sessions")
                 self.log_message(f"  - Assigned presentations: {metadata['n_assigned_items']}")
                 self.log_message(f"  - Unassigned presentations: {metadata['n_unassigned_items']}")
+                self.update_sub_progress(100)
                 
                 # Step 6: Analyze sessions
                 self.update_progress(70, "Analyzing sessions...")
+                self.reset_sub_progress()
                 self.log_message("Step 6: Analyzing sessions...")
                 df_sessions['session_coherence'] = session_organizer.calculate_avg_similarity(df_sessions, df_presentation_similarities.values)
                 df_sessions['session_distinctiveness'] = session_organizer.calculate_silhouette_scores(df_sessions, df_presentation_embeddings.values, labels)
                 df['presentation_session_fit'] = session_organizer.calculate_document_similarities(df_presentation_similarities.values, labels)
                 self.log_message("✓ Session analysis complete")
+                self.update_sub_progress(100)
                 
                 # Save intermediate results
                 self.update_progress(80, "Saving intermediate results...")
+                self.reset_sub_progress()
                 self.session_data = {
                     'df': df,
                     'df_sessions': df_sessions,
@@ -601,6 +704,7 @@ class SessionCreatorApp(tk.Tk):
                 
                 self.log_message(f"✓ Saved sessions to: {sessions_file}")
                 self.log_message(f"✓ Saved presentations to: {presentations_file}")
+                self.update_sub_progress(100)
                 
                 # Enable save and generate titles buttons
                 self.save_button.config(state='normal')
@@ -617,6 +721,7 @@ class SessionCreatorApp(tk.Tk):
                 import traceback
                 self.log_message(f"Full error: {traceback.format_exc()}")
                 self.update_progress(0, "Process failed")
+                self.reset_sub_progress()
             finally:
                 # Re-enable the run button
                 self.run_button.config(state='normal')
