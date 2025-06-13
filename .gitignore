@@ -1,0 +1,25 @@
+# Windows
+Thumbs.db
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+#streamlit
+.streamlit/secrets.toml
+
+# LLMs
+*.gguf
+
+# Python
+__pycache__/
+
+# Datafiles
+*.csv
+*.xlsx
+*.json
