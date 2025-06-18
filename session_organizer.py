@@ -13,6 +13,62 @@ import time
 import os
 from dotenv import load_dotenv
 
+COLUMNS = {
+    'EMBEDDING_MODEL': 'embedding_model',
+    'SESSION_SIZE': 'session_size',
+    'PRESENTATION_INDICES': 'presentation_indices',
+    'CLUSTER_ID': 'cluster_id',
+    'HYBRID_SESSION_TITLE': 'hybrid_session_title',
+}
+
+#Helper functions
+def create_index_mappings(df):
+    """
+    Create bidirectional mappings between DataFrame indices and array positions.
+    
+    Args:
+        df: DataFrame to create mappings for
+        
+    Returns:
+        tuple: (position_to_index, index_to_position)
+    """
+    position_to_index = {pos: idx for pos, idx in enumerate(df.index)}
+    index_to_position = {idx: pos for pos, idx in enumerate(df.index)}
+    return position_to_index, index_to_position
+
+def array_positions_to_df_indices(array_positions, position_to_index_map):
+    """
+    Convert array positions to DataFrame indices.
+    
+    Args:
+        array_positions: List/array of positions in the array
+        position_to_index_map: Mapping from positions to DataFrame indices
+        
+    Returns:
+        list: Corresponding DataFrame indices
+    """
+    if isinstance(array_positions, (int, np.integer)):
+        return position_to_index_map[array_positions]
+    
+    return [position_to_index_map[pos] for pos in array_positions]
+
+def df_indices_to_array_positions(df_indices, index_to_position_map):
+    """
+    Convert DataFrame indices to array positions.
+    
+    Args:
+        df_indices: List/array of DataFrame indices  
+        index_to_position_map: Mapping from DataFrame indices to positions
+        
+    Returns:
+        list: Corresponding array positions
+    """
+    if isinstance(df_indices, (int, np.integer)):
+        return index_to_position_map[df_indices]
+    
+    return [index_to_position_map[idx] for idx in df_indices]
+
+
 def load_presentations(file_path, Title_name='Title', Abstract_name='Abstract', Abstract_ID_name='Submission ID', 
                        title_column='Title', abstract_column='Abstract', abstract_id_column='Abstract ID', topic_column='Title and Abstract'):
     """
@@ -27,82 +83,103 @@ def load_presentations(file_path, Title_name='Title', Abstract_name='Abstract', 
         abstract_id_column (str): Name for the abstract ID column in the output DataFrame.
         topic_column (str): Name for the combined title and abstract column in the output DataFrame.
     Returns:
-        pd.DataFrame: DataFrame containing the prepared presentation information.
+        tuple: (df, title_column, abstract_column, abstract_id_column, topic_column)
     """
     df = pd.read_excel(file_path)
     if Title_name not in df.columns or Abstract_name not in df.columns or Abstract_ID_name not in df.columns:
         raise ValueError(f"Columns '{Title_name}', '{Abstract_name}', '{Abstract_ID_name}' must be present in the Excel file.")
-    df = df[[Title_name, Abstract_name, Abstract_ID_name]].rename(columns={Title_name: title_column, Abstract_name: abstract_column, Abstract_ID_name: abstract_id_column})
-
-    # Drop any presentations that are missing an abstrct or title
-    df.dropna(subset=[title_column,abstract_column], inplace=True)
     
-    # Combine Titles and Abstracts with a semicolon in between. 
+    # Create column rename map for the key columns
+    column_rename_map = {
+        Title_name: title_column,
+        Abstract_name: abstract_column,
+        Abstract_ID_name: abstract_id_column
+    }
+    
+    # Rename the key columns while keeping all other columns
+    df = df.rename(columns=column_rename_map)
+
+    # Drop any presentations that are missing an abstract or title
+    df = df.dropna(subset=[title_column, abstract_column])
+    
+    # Combine Titles and Abstracts with a colon in between. 
     # This should be the same as + but .agg() handles empty fields or fields that have non-text entries.
-    df[topic_column] = df[[title_column, abstract_column,]].agg(': '.join, axis=1)
+    df[topic_column] = df[[title_column, abstract_column]].agg(': '.join, axis=1)
     
     return df, title_column, abstract_column, abstract_id_column, topic_column
 
-import pandas as pd
-
-def parse_committee_file_simple(file_path):
+def load_committees(file_path, Committee_Name_column='Committee_Name', Description_column='Description',
+                   committee_name_column='Committee_Name', description_column='Description', 
+                   combined_column='Name_Description'):
     """
-    Parse a committee file where each committee follows the pattern:
-    - Committee name (single line)
-    - Committee description (one or more lines)
-    - Blank line
+    Load committees from a CSV or Excel spreadsheet.
+    
+    Args:
+        file_path (str): Path to the CSV or Excel file containing committee information
+        Committee_Name_column (str): Spreadsheet column name that contains the committee names
+        Description_column (str): Spreadsheet column name that contains the descriptions
+        committee_name_column (str): Name for the committee name column in the output DataFrame
+        description_column (str): Name for the description column in the output DataFrame
+        combined_column (str): Name for the combined committee name and description column
+        
+    Returns:
+        tuple: (df_committees, committee_name_column, description_column, combined_column)
     """
-    with open(file_path, 'r', encoding='utf-8') as file:
-        lines = file.readlines()
+    # Determine file type and read accordingly
+    if file_path.lower().endswith('.csv'):
+        df_committees = pd.read_csv(file_path)
+    elif file_path.lower().endswith(('.xlsx', '.xls')):
+        df_committees = pd.read_excel(file_path)
+    else:
+        raise ValueError(f"Unsupported file format. Please use CSV (.csv) or Excel (.xlsx, .xls) files.")
     
-    committees = []
-    current_committee = None
-    current_description_lines = []
+    # Validate required columns exist in the file
+    if Committee_Name_column not in df_committees.columns:
+        raise ValueError(f"Column '{Committee_Name_column}' not found in file. Available columns: {list(df_committees.columns)}")
+    if Description_column not in df_committees.columns:
+        raise ValueError(f"Column '{Description_column}' not found in file. Available columns: {list(df_committees.columns)}")
     
-    for line in lines:
-        line = line.strip()
-        
-        if not line:  # Blank line - end of current committee
-            if current_committee is not None:
-                description = ' '.join(current_description_lines).strip()
-                committees.append({
-                    'Committee_Name': current_committee,
-                    'Description': description,
-                    'Name_Description': f"{current_committee}: {description}"
-                })
-                current_committee = None
-                current_description_lines = []
-        
-        elif current_committee is None:  # First non-blank line after blank/start = committee name
-            current_committee = line
-            current_description_lines = []
-        
-        else:  # Continuation of description
-            current_description_lines.append(line)
+    # Select and rename columns
+    df_committees = df_committees[[Committee_Name_column, Description_column]].rename(
+        columns={
+            Committee_Name_column: committee_name_column, 
+            Description_column: description_column
+        }
+    )
     
-    # Handle the last committee if file doesn't end with blank line
-    if current_committee is not None:
-        description = ' '.join(current_description_lines).strip()
-        committees.append({
-            'Committee_Name': current_committee,
-            'Description': description,
-            'Name_Description': f"{current_committee}: {description}"
-        })
-    return pd.DataFrame(committees)
+    # Clean up any NaN values
+    df_committees = df_committees.dropna(subset=[committee_name_column, description_column])
+    
+    # Create combined description column (like topic_column in load_presentations)
+    df_committees[combined_column] = df_committees[[committee_name_column, description_column]].agg(': '.join, axis=1)
+    
+    return df_committees, committee_name_column, description_column, combined_column
 
 def embed_documents(df_presentations, topic_column, embedding_model):
     if not isinstance(embedding_model, SentenceTransformer):
         raise ValueError("embedding_model must be an instance of SentenceTransformer.")
     if topic_column not in df_presentations.columns:
         raise ValueError(f"topic_column '{topic_column}' must be present in the DataFrame.")
+    
+    # Extract model name for the new column
+    model_name = getattr(embedding_model, 'model_name_or_path', 'Unknown')
+    if hasattr(embedding_model, 'model_card_data') and embedding_model.model_card_data:
+        base_model = getattr(embedding_model.model_card_data, 'base_model', None)
+        if base_model:
+            model_info = f"{model_name} ({base_model})"
+        else:
+            model_info = model_name
+    else:
+        model_info = model_name
+    
     if embedding_model.model_card_data.base_model == "jxm/cde-small-v1":
         # This is the CDE model, so we need to use the special CDE embedding function
-        return cde_embed_documents(df_presentations, topic_column, embedding_model)
+        return cde_embed_documents(df_presentations, topic_column, embedding_model, model_info)
     else:
         # This is a standard SentenceTransformer model, so we can use the standard embedding function
-        return standard_embed_documents(df_presentations, topic_column, embedding_model)
+        return standard_embed_documents(df_presentations, topic_column, embedding_model, model_info)
 
-def standard_embed_documents(df_presentations, topic_column, embedding_model):
+def standard_embed_documents(df_presentations, topic_column, embedding_model, model_info):
     """
     Embed the presentation topics using a standard SentenceTransformer model.
     
@@ -110,10 +187,10 @@ def standard_embed_documents(df_presentations, topic_column, embedding_model):
         df_presentations (pd.DataFrame): DataFrame containing the presentations.
         topic_column (str): Column name in df_presentations that contains the topics to embed.
         embedding_model (SentenceTransformer): The SentenceTransformer model to use for embedding.
+        model_info (str): Information about the embedding model used.
         
     Returns:
-        pd.DataFrame: DataFrame containing the embeddings of the presentation topics.
-        pd.DataFrame: DataFrame containing the similarity matrix of the presentation embeddings.
+        pd.DataFrame: DataFrame containing the embeddings of the presentation topics with model info.
     """
     # Text to embed
     presentation_topics = df_presentations[topic_column].tolist()
@@ -126,18 +203,21 @@ def standard_embed_documents(df_presentations, topic_column, embedding_model):
 
     df_presentation_embeddings = pd.DataFrame(presentation_embeddings.cpu(), index = df_presentations.index)
     
+    # Add model information column
+    df_presentation_embeddings[COLUMNS['EMBEDDING_MODEL']] = model_info
+    
     return df_presentation_embeddings
 
-def cde_embed_documents(df_presentations, topic_column, cde_embeddings_model):
+def cde_embed_documents(df_presentations, topic_column, cde_embeddings_model, model_info):
     """
     Embed the presentation topics using a CDE (Contextual Document Embeddings) model.
     Args:
         df_presentations (pd.DataFrame): DataFrame containing the presentations.
         topic_column (str): Column name in df_presentations that contains the topics to embed.
         cde_embeddings_model (SentenceTransformer): The CDE SentenceTransformer model to use for embedding.
+        model_info (str): Information about the embedding model used.
     Returns:
-        pd.DataFrame: DataFrame containing the embeddings of the presentation topics.
-        pd.DataFrame: DataFrame containing the similarity matrix of the presentation embeddings.
+        pd.DataFrame: DataFrame containing the embeddings of the presentation topics with model info.
     """
     # Text to embed
     presentation_topics = df_presentations[topic_column].tolist()
@@ -184,6 +264,8 @@ def cde_embed_documents(df_presentations, topic_column, cde_embeddings_model):
     )
     df_presentation_embeddings = pd.DataFrame(presentation_embeddings.cpu(), index = df_presentations.index)
 
+    # Add model information column
+    df_presentation_embeddings[COLUMNS['EMBEDDING_MODEL']] = model_info
 
     return df_presentation_embeddings
 
@@ -375,78 +457,410 @@ def create_sessions(df_presentations, df_presentation_similarities, df_presentat
  
     return df_result, df_sessions, labels, metadata
 
-def _assign_remaining_items(unassigned_items, final_clusters, similarity_matrix):
-    """Efficiently assign remaining items to best matching clusters."""
-    if not final_clusters or not unassigned_items:
-        return final_clusters
-    
-    # Pre-filter empty clusters
-    non_empty_clusters = [(i, cluster) for i, cluster in enumerate(final_clusters) if cluster]
-    
-    if not non_empty_clusters:
-        return final_clusters
-    
-    for leaf in unassigned_items:
-        best_cluster_idx = -1
-        best_similarity = -1
-        
-        for cluster_idx, cluster in non_empty_clusters:
-            # Vectorized similarity calculation
-            similarities = similarity_matrix[leaf, cluster]
-            avg_similarity = np.mean(similarities)
-            
-            if avg_similarity > best_similarity:
-                best_similarity = avg_similarity
-                best_cluster_idx = cluster_idx
-        
-        if best_cluster_idx >= 0:
-            final_clusters[best_cluster_idx].append(leaf)
-    
-    return final_clusters
+def get_unique_top_indices_variable(data_array, target_counts):
+    """
+    Efficiently selects variable numbers of top unique indices for each row of an array.
 
-def _create_output_structures(final_clusters, df_presentations, cluster_column_name, n_pres):
-    """Create DataFrame with cluster assignments, labels, and metadata."""
-    # Initialize labels array
-    labels = [-1] * n_pres
+    This function implements a priority-based two-phase process with support for
+    different target counts per row:
+    1. Priority Assignment: Uses a priority matrix to determine which row has 
+       the highest claim on each column. For each row, assigns columns from 
+       its top candidates that it has the highest priority for.
+    2. Greedy Backfilling: For rows that still need more indices, greedily 
+       assigns the best remaining unassigned columns in value-descending order.
+
+    The algorithm uses tie-breaking to ensure deterministic results when multiple
+    rows have identical values for the same column (lower row indices win).
+
+    Args:
+        data_array (np.ndarray): The 2D input array of values.
+        target_counts (array-like): Array/list of desired number of unique indices 
+                                   per row. Must have same length as number of rows.
+
+    Returns:
+        list: A list where each element is a 1D numpy array containing the 
+              unique column indices for that row, sorted in ascending order.
+              Each array's length equals the corresponding target_counts value.
+
+    Algorithm Details:
+        - Uses argpartition for O(n) top-k selection per row
+        - Maintains assignment tracking with boolean arrays for efficiency  
+        - Processes remaining columns in batches to minimize redundant operations
+        - Time complexity: O(nm log m) where n=rows, m=columns
+        
+    Raises:
+        ValueError: If target_counts length doesn't match number of rows or
+                   if any target count exceeds available columns.
+    """
+    target_counts = np.asarray(target_counts)
+    num_rows, num_cols = data_array.shape
     
-    # Create cluster DataFrame data
-    cluster_data = []
-    total_assigned = 0
+    # Validation
+    if len(target_counts) != num_rows:
+        raise ValueError(f"target_counts length ({len(target_counts)}) must match number of rows ({num_rows})")
     
-    for cluster_id, cluster_indices in enumerate(final_clusters):
-        if cluster_indices:  # Only include non-empty clusters
-            # Sort indices for consistent output
-            sorted_indices = sorted(cluster_indices)
-            cluster_data.append({
-                'cluster_id': cluster_id,
-                'presentation_indices': sorted_indices,
-                'cluster_size': len(sorted_indices)
-            })
+    if np.any(target_counts > num_cols):
+        raise ValueError(f"target_counts cannot exceed number of columns ({num_cols})")
+    
+    if np.any(target_counts < 0):
+        raise ValueError("target_counts must be non-negative")
+    
+    # Handle edge case where some rows need 0 indices
+    max_target = np.max(target_counts) if len(target_counts) > 0 else 0
+    if max_target == 0:
+        return [np.array([], dtype=int) for _ in range(num_rows)]
+    
+    # Create priority matrix: higher values = higher priority
+    # Break ties by giving priority to lower row indices
+    priority_matrix = data_array + (np.arange(num_rows)[:, None] * 1e-10)
+    
+    # Find winning row for each column
+    winning_rows = np.argmax(priority_matrix, axis=0)
+    
+    # Create initial assignments based on top values per row
+    # Use the maximum target count for argpartition to ensure we get enough candidates
+    top_indices = {}
+    for row in range(num_rows):
+        if target_counts[row] > 0:
+            k = min(target_counts[row], num_cols)
+            top_indices[row] = np.argpartition(data_array[row], -k)[-k:]
+        else:
+            top_indices[row] = np.array([], dtype=int)
+    
+    # Build result efficiently - use list since rows have different lengths
+    result = [np.full(target_counts[row], -1, dtype=int) for row in range(num_rows)]
+    assigned_cols = np.zeros(num_cols, dtype=bool)
+    row_counts = np.zeros(num_rows, dtype=int)
+    
+    # Phase 1: Assign columns to their winning rows if they're in top candidates
+    for row in range(num_rows):
+        if target_counts[row] == 0:
+            continue
             
-            # Assign labels
-            for item_index in cluster_indices:
-                labels[item_index] = cluster_id
+        row_top_indices = top_indices[row]
+        if len(row_top_indices) == 0:
+            continue
             
-            total_assigned += len(cluster_indices)
+        row_values = data_array[row, row_top_indices]
+        
+        # Sort by value (descending)
+        sorted_order = np.argsort(row_values)[::-1]
+        
+        for idx in sorted_order:
+            col = row_top_indices[idx]
+            if (not assigned_cols[col] and 
+                winning_rows[col] == row and 
+                row_counts[row] < target_counts[row]):
+                result[row][row_counts[row]] = col
+                assigned_cols[col] = True
+                row_counts[row] += 1
     
-    # Create cluster DataFrame
-    df_sessions = pd.DataFrame(cluster_data)
+    # Phase 2: Fill remaining slots with best available columns
+    remaining_cols = np.where(~assigned_cols)[0]
     
-    # Create modified presentations DataFrame
+    for row in range(num_rows):
+        need = target_counts[row] - row_counts[row]
+        if need > 0 and len(remaining_cols) > 0:
+            # Get values for remaining columns for this row
+            remaining_values = data_array[row, remaining_cols]
+            
+            # Get top 'need' columns
+            if len(remaining_cols) >= need:
+                best_remaining = np.argpartition(remaining_values, -need)[-need:]
+            else:
+                best_remaining = np.arange(len(remaining_cols))
+            
+            # Sort by value (descending)
+            best_remaining = best_remaining[np.argsort(remaining_values[best_remaining])[::-1]]
+            
+            # Assign them
+            for i, idx in enumerate(best_remaining):
+                if row_counts[row] >= target_counts[row]:
+                    break
+                col = remaining_cols[idx]
+                result[row][row_counts[row]] = col
+                row_counts[row] += 1
+            
+            # Remove assigned columns from remaining pool
+            mask = np.ones(len(remaining_cols), dtype=bool)
+            mask[best_remaining[:len(best_remaining)]] = False
+            remaining_cols = remaining_cols[mask]
+    
+    # Sort each row's indices and convert to proper arrays
+    for row in range(num_rows):
+        if target_counts[row] > 0:
+            # Only sort non-negative values (in case some slots weren't filled)
+            valid_indices = result[row][result[row] >= 0]
+            result[row] = np.sort(valid_indices)
+        else:
+            result[row] = np.array([], dtype=int)
+    
+    return result
+
+def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_embeddings, 
+                             df_hybrid_presentations=None, hybrid_session_column=None, df_hybrid_embeddings=None, 
+                   max_sessions=100, min_session_size=8, tree_merge_stop=0.95, cluster_column_name="Session"):
+    """
+    Create sessions from the presentations based on their embeddings and similarities. It is optional to consider hybrid sessions.
+    If hybrid sessions are provided, they will be filled first before clustering the remaining presentations. This means that hybrid
+    sessions always get first pick on matching presentations.
+
+    Args:
+        df_presentations (pd.DataFrame): DataFrame containing the presentations.
+        similarity_func (callable): Function from embedding_model.similarity to compute the similarity matrix of the presentation embeddings.
+        df_hybrid_presentations (pd.DataFrame, optional): DataFrame containing hybrid presentations. If provided, these will be filled first.
+        hybrid_session_column (str, optional): Column name in df_hybrid_presentations that contains the session information.
+        df_hybrid_embeddings (pd.DataFrame, optional): DataFrame containing the embeddings of the hybrid presentations. If provided, these will be used for hybrid sessions.
+                                                    The index of df_hybrid_embeddings must align with df_hybrid_presentations.
+                                                    The last column is the embedding model name.
+        df_presentation_embeddings (pd.DataFrame): DataFrame containing the embeddings of the presentation topics.
+                                                 The last column is the embedding model name.
+        max_sessions (int): Maximum number of sessions to create.
+        min_session_size (int): Minimum number of presentations in a session.
+        tree_merge_stop (float): The fraction of the tree to stop clustering at.
+        cluster_column_name (str): The name of the column to store cluster labels.
+
+    Returns:
+        tuple: (df_presentations, df_sessions, labels, metadata)
+    Raises:
+        ValueError: If parameters are invalid.
+    """
+    # Input validation
+    if max_sessions <= 0:
+        raise ValueError("max_sessions must be greater than 0.")
+    if not (0 < tree_merge_stop <= 1):
+        raise ValueError("tree_merge_stop must be between 0 and 1.")
+    if min_session_size < 1:
+        raise ValueError("min_session_size must be at least 1.")
+    if not df_presentations.index.equals(df_presentation_embeddings.index):
+        raise ValueError("Indices of df_presentations and df_presentation_embeddings must match.")
+
+    # Prepare presentation embeddings (numeric only)
+    if COLUMNS['EMBEDDING_MODEL'] not in df_presentation_embeddings.columns:
+        raise ValueError(f"'{COLUMNS['EMBEDDING_MODEL']}' column missing from df_presentation_embeddings.")
+    model_name_presentations = df_presentation_embeddings[COLUMNS['EMBEDDING_MODEL']].iloc[0]
+    # Record the mapping from DataFrame indices to array positions before any array operations
+    pres_pos_to_idx, pres_idx_to_pos = create_index_mappings(df_presentations)
+
+    # Convert embeddings DataFrame to numpy array for faster operations
+    embeddings_array = df_presentation_embeddings.drop(columns=[COLUMNS['EMBEDDING_MODEL']]).values
+
+    # Calculate similarity matrix for all general presentations
+    similarity_matrix = similarity_func(embeddings_array, embeddings_array) # This is similarity within df_presentations
+    # Convert similarity_matrix to numpy if it's a torch tensor
+    if hasattr(similarity_matrix, 'cpu'):
+        similarity_matrix = similarity_matrix.cpu().numpy()
+    elif hasattr(similarity_matrix, 'numpy'):
+        similarity_matrix = similarity_matrix.numpy()
+
+    assigned_positions = set()  # Track which array positions are assigned
+    final_clusters = []  # Will store array positions, convert to DF indices at the end
+        
+    # Hybrid Sessions are optional, so check if they are provided
+    if df_hybrid_presentations is not None and df_hybrid_embeddings is not None and hybrid_session_column is not None:
+        if hybrid_session_column not in df_hybrid_presentations.columns:
+            raise ValueError(f"hybrid_session_column '{hybrid_session_column}' must be present in df_hybrid_presentations.")   
+        if not df_hybrid_presentations.index.equals(df_hybrid_embeddings.index):
+            raise ValueError("Indices of df_hybrid_presentations and df_hybrid_embeddings must match.")
+        if COLUMNS['EMBEDDING_MODEL'] not in df_hybrid_embeddings.columns:
+            raise ValueError(f"'{COLUMNS['EMBEDDING_MODEL']}' column missing from df_hybrid_embeddings.")
+
+        model_name_hybrid = df_hybrid_embeddings[COLUMNS['EMBEDDING_MODEL']].iloc[0]
+        if model_name_hybrid != model_name_presentations:
+            raise ValueError(
+                f"Embedding model mismatch: Main presentations embedded with '{model_name_presentations}', "
+                f"hybrid presentations with '{model_name_hybrid}'. They must use the same model."
+            )
+        
+        numeric_hybrid_embeddings_df = df_hybrid_embeddings.drop(columns=[COLUMNS['EMBEDDING_MODEL']])
+        
+        # Create a representative embedding for each hybrid session
+        # The resulting DataFrame will have hybrid session IDs (from hybrid_session_column) as its index.
+        representative_hybrid_embeddings_df = numeric_hybrid_embeddings_df.groupby(
+            df_hybrid_presentations[hybrid_session_column]
+        ).mean()
+
+        # Get count of presentations per session (same order as embeddings)
+        session_counts = df_hybrid_presentations.groupby(hybrid_session_column).size()
+        count_to_add = min_session_size - session_counts
+
+        # Simarity matrix between hybrid sessions and general presentations
+        # The resulting matrix will have shape (n_hybrid_sessions, n_presentations)
+        hy_session_gen_pres_similarities = similarity_func(
+            representative_hybrid_embeddings_df.values,
+            embeddings_array
+        )
+        # Convert similarity_matrix to numpy if it's a torch tensor
+        if hasattr(hy_session_gen_pres_similarities, 'cpu'):
+            hy_session_gen_pres_similarities = hy_session_gen_pres_similarities.cpu().numpy()
+        elif hasattr(hy_session_gen_pres_similarities, 'numpy'):
+            hy_session_gen_pres_similarities = hy_session_gen_pres_similarities.numpy()
+
+        presentations_to_hybrid = get_unique_top_indices_variable(hy_session_gen_pres_similarities, count_to_add)
+        # Convert hybrid presentations to array positions and add to final clusters
+        hybrid_session_names = list(representative_hybrid_embeddings_df.index)
+        for session_idx, (session_name, additional_positions) in enumerate(zip(hybrid_session_names, presentations_to_hybrid)):
+            # Get existing hybrid presentations for this session (convert DF indices to positions)
+            existing_hybrid_df_indices = df_hybrid_presentations[
+                df_hybrid_presentations[hybrid_session_column] == session_name
+            ].index.tolist()
+            
+            final_clusters.append(list(additional_positions))
+            
+            # Mark all these positions as assigned
+            assigned_positions.update(list(additional_positions))
+        
+    # Create filtered embeddings and similarity matrix for unassigned presentations
+    unassigned_positions = [i for i in range(len(embeddings_array)) if i not in assigned_positions]
+
+    if len(unassigned_positions) == 0:
+        # All presentations assigned to hybrid sessions
+        pass
+    else:
+        # Create filtered arrays for clustering
+        filtered_embeddings = embeddings_array[unassigned_positions]
+        # filtered_similarity_matrix = similarity_matrix[np.ix_(unassigned_positions, unassigned_positions)]
+        
+        # Create mapping from filtered positions to original positions
+        filtered_to_original = {i: unassigned_positions[i] for i in range(len(unassigned_positions))}
+        
+        # Perform hierarchical clustering on filtered data
+        linkage_matrix = linkage(
+            y=filtered_embeddings,
+            method='average',
+            metric='cosine',
+        )
+        
+        # Clustering loop (similar to existing logic but with filtered data)
+        n_nodes = linkage_matrix.shape[0]
+        n_filtered = len(unassigned_positions)
+        
+        if n_nodes > 0:  # Only if there are presentations to cluster
+            unassigned_count = linkage_matrix[:, 3].copy()
+            unassigned_leaves = [[] for _ in range(n_nodes)]
+            merge_stop_index = int(n_nodes * tree_merge_stop)
+            
+            for i in range(n_nodes):
+                left_child, right_child = linkage_matrix[i, 0:2].astype(int)
+                
+                # Process children (using filtered positions)
+                if left_child >= n_filtered:
+                    left_idx = left_child - n_filtered
+                    left_size = unassigned_count[left_idx]
+                    unassigned_leaves[i].extend(unassigned_leaves[left_idx])
+                else:
+                    left_size = 1
+                    unassigned_leaves[i].append(left_child)
+                
+                if right_child >= n_filtered:
+                    right_idx = right_child - n_filtered
+                    right_size = unassigned_count[right_idx]
+                    unassigned_leaves[i].extend(unassigned_leaves[right_idx])
+                else:
+                    right_size = 1
+                    unassigned_leaves[i].append(right_child)
+                
+                unassigned_count[i] = left_size + right_size
+                
+                # Check clustering conditions
+                if (unassigned_count[i] >= min_session_size and 
+                    i < merge_stop_index and 
+                    len(final_clusters) < max_sessions):
+                    
+                    # Convert filtered positions back to original array positions
+                    original_positions = [filtered_to_original[pos] for pos in unassigned_leaves[i]]
+                    final_clusters.append(original_positions)
+                    unassigned_count[i] = 0
+                    unassigned_leaves[i] = []
+            
+            # Handle remaining unassigned items
+            if unassigned_leaves[-1]:
+                # Convert to original positions
+                remaining_original = [filtered_to_original[pos] for pos in unassigned_leaves[-1]]
+                final_clusters = _assign_remaining_items(remaining_original, final_clusters, similarity_matrix)
+
+    # Convert all final_clusters from array positions to DataFrame indices
+    final_clusters_df_indices = []
+    for cluster_positions in final_clusters:
+        cluster_df_indices = array_positions_to_df_indices(cluster_positions, pres_pos_to_idx)
+        final_clusters_df_indices.append(cluster_df_indices)
+
+    # Create outputs using DataFrame indices
+    df_result, df_sessions, labels, metadata = _create_output_structures_with_df_indices(
+        final_clusters_df_indices, df_presentations, cluster_column_name
+    )
+
+    return df_result, df_sessions, labels, metadata
+
+def _create_output_structures_with_df_indices(final_clusters_df_indices, df_presentations, cluster_column_name):
+    """
+    Create output structures using DataFrame indices instead of array positions.
+    """
+    # Initialize cluster labels
+    labels = pd.Series(-1, index=df_presentations.index, name=cluster_column_name)
+    
+    # Assign cluster labels
+    for cluster_id, df_indices in enumerate(final_clusters_df_indices):
+        labels.loc[df_indices] = cluster_id
+    
+    # Create result DataFrame
     df_result = df_presentations.copy()
     df_result[cluster_column_name] = labels
     
+    # Create sessions summary
+    session_data = []
+    for cluster_id, df_indices in enumerate(final_clusters_df_indices):
+        session_data.append({
+            'cluster_id': cluster_id,
+            COLUMNS['SESSION_SIZE']: len(df_indices),
+            COLUMNS['PRESENTATION_INDICES']: df_indices
+        })
+    
+    df_sessions = pd.DataFrame(session_data)
+    
     # Create metadata
+    n_assigned = sum(len(cluster) for cluster in final_clusters_df_indices)
+    n_unassigned = len(df_presentations) - n_assigned
+    
     metadata = {
-        'n_clusters': len(df_sessions),
-        'n_assigned_items': total_assigned,
-        'n_unassigned_items': labels.count(-1),
-        'cluster_sizes': df_sessions['cluster_size'].tolist() if not df_sessions.empty else [],
-        'total_presentations': len(df_result),
-        'clustering_efficiency': total_assigned / len(df_result) if len(df_result) > 0 else 0
+        'n_clusters': len(final_clusters_df_indices),
+        'n_assigned_items': n_assigned,
+        'n_unassigned_items': n_unassigned,
+        'n_total_items': len(df_presentations)
     }
     
     return df_result, df_sessions, labels, metadata
+
+def _assign_remaining_items(remaining_positions, final_clusters, similarity_matrix):
+    """
+    Assign remaining items to existing clusters or create new ones.
+    This version works with array positions.
+    """
+    if not remaining_positions or not final_clusters:
+        if remaining_positions:
+            final_clusters.append(remaining_positions)
+        return final_clusters
+    
+    # For each remaining item, find the best cluster
+    for pos in remaining_positions:
+        best_cluster_idx = 0
+        best_similarity = -1
+        
+        # Calculate average similarity to each existing cluster
+        for cluster_idx, cluster_positions in enumerate(final_clusters):
+            if cluster_positions:  # Only consider non-empty clusters
+                similarities = [similarity_matrix[pos, cluster_pos] for cluster_pos in cluster_positions]
+                avg_similarity = np.mean(similarities)
+                
+                if avg_similarity > best_similarity:
+                    best_similarity = avg_similarity
+                    best_cluster_idx = cluster_idx
+        
+        # Add to best cluster
+        final_clusters[best_cluster_idx].append(pos)
+    
+    return final_clusters
+
 
 def calculate_avg_similarity(df_sessions, similarity_matrix):
     """
@@ -462,7 +876,7 @@ def calculate_avg_similarity(df_sessions, similarity_matrix):
     avg_similarities = []
     
     for _, row in df_sessions.iterrows():
-        cluster_indices = row['presentation_indices']
+        cluster_indices = row[COLUMNS['PRESENTATION_INDICES']]
         
         if len(cluster_indices) < 2:
             # Single item clusters have no internal similarity
@@ -526,7 +940,7 @@ def calculate_silhouette_scores(df_sessions, embeddings_array, labels):
     cluster_silhouette_scores = []
     
     for _, row in df_sessions.iterrows():
-        cluster_id = row['cluster_id']
+        cluster_id = row[COLUMNS['CLUSTER_ID']]
         
         # Find samples belonging to this cluster in the assigned data
         cluster_mask = assigned_labels == cluster_id
@@ -543,7 +957,7 @@ def calculate_document_similarities(similarity_matrix, labels):
     """
     
     Calculate average similarity of each document to others in its cluster
-    This version have been vectorized for better performance with large datasets
+    This version has been vectorized for better performance with large datasets
     Args:
         similarity_matrix (np.ndarray): Similarity matrix of shape (n_samples, n_samples)
         labels (array-like): Cluster labels for each document
@@ -1254,4 +1668,93 @@ def add_committee_matches_to_clusters(df_sessions, session_committee_matches):
     return df_sessions.merge(
         committee_pivot, left_on="cluster_id", right_index=True, how="left"
     )
+
+def load_hybrid_sessions(file_path, Session_column='Session', Title_column='Title', Abstract_column='Abstract', 
+                        Abstract_ID_column='Submission ID - 7 digits',
+                        session_column='Session', title_column='Title', abstract_column='Abstract', 
+                        abstract_id_column='Abstract ID', topic_column='Title and Abstract'):
+    """
+    Load hybrid session presentations from a CSV or Excel file and create both presentations and sessions DataFrames.
+    
+    Args:
+        file_path (str): Path to the CSV or Excel file containing hybrid session information
+        Session_column (str): Spreadsheet column name that contains the session names
+        Title_column (str): Spreadsheet column name that contains the presentation titles
+        Abstract_column (str): Spreadsheet column name that contains the abstracts
+        Abstract_ID_column (str): Spreadsheet column name that contains the abstract IDs
+        session_column (str): Name for the session column in the output DataFrame
+        title_column (str): Name for the title column in the output DataFrame
+        abstract_column (str): Name for the abstract column in the output DataFrame
+        abstract_id_column (str): Name for the abstract ID column in the output DataFrame
+        topic_column (str): Name for the combined title and abstract column in the output DataFrame
+        
+    Returns:
+        tuple: (df_presentations, df_sessions, session_column, title_column, abstract_column, abstract_id_column, topic_column)
+    """
+    # Determine file type and read accordingly
+    if file_path.lower().endswith('.csv'):
+        df = pd.read_csv(file_path)
+    elif file_path.lower().endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(file_path)
+    else:
+        raise ValueError(f"Unsupported file format. Please use CSV (.csv) or Excel (.xlsx, .xls) files.")
+    
+    # Validate required columns exist in the file
+    required_columns = [Session_column, Title_column, Abstract_column, Abstract_ID_column]
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}. "
+                        f"Expected columns: {required_columns}")
+    
+    # Create presentations DataFrame
+    # First, rename the key columns
+    column_rename_map = {
+        Session_column: session_column,
+        Title_column: title_column, 
+        Abstract_column: abstract_column,
+        Abstract_ID_column: abstract_id_column
+    }
+    
+    df_presentations = df.rename(columns=column_rename_map)
+    
+    # Clean up any NaN values in critical columns
+    df_presentations = df_presentations.dropna(subset=[session_column, title_column, abstract_column])
+    
+    # Create combined topic column (like load_presentations)
+    df_presentations[topic_column] = df_presentations[[title_column, abstract_column]].agg(': '.join, axis=1)
+    
+    # Reset index to ensure clean sequential indexing
+    df_presentations = df_presentations.reset_index(drop=True)
+    
+    # Create sessions DataFrame (like create_sessions output)
+    session_data = []
+    
+    # Create mapping from session names to integer IDs (starting from 1)
+    unique_sessions = sorted(df_presentations[session_column].unique())
+    session_name_to_id = {name: idx + 1 for idx, name in enumerate(unique_sessions)}
+    
+    # Group by session to create session information
+    for session_name, group in df_presentations.groupby(session_column):
+        presentation_indices = group.index.tolist()
+        cluster_id = session_name_to_id[session_name]
+        
+        session_data.append({
+            COLUMNS['CLUSTER_ID']: cluster_id,  # Use integer ID starting from 1
+            COLUMNS['PRESENTATION_INDICES']: presentation_indices,
+            COLUMNS['SESSION_SIZE']: len(presentation_indices),
+            COLUMNS['HYBRID_SESSION_TITLE']: session_name  # Keep original session name as title
+        })
+    
+    # Sort by cluster_id to ensure consistent ordering
+    session_data = sorted(session_data, key=lambda x: x[COLUMNS['CLUSTER_ID']])
+    df_sessions = pd.DataFrame(session_data)
+    
+    # Add cluster_id mapping to presentations DataFrame for consistency
+    df_presentations[COLUMNS['CLUSTER_ID']] = df_presentations[session_column].map(session_name_to_id)
+    
+    print(f"Loaded {len(df_presentations)} hybrid presentations in {len(df_sessions)} sessions")
+    print(f"Session mapping: {session_name_to_id}")
+    
+    return df_presentations, df_sessions, session_column, title_column, abstract_column, abstract_id_column, topic_column
 
