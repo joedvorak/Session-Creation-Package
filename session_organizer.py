@@ -90,7 +90,14 @@ def load_presentations(file_path, Title_name='Title', Abstract_name='Abstract', 
     Returns:
         tuple: (df, title_column, abstract_column, abstract_id_column, topic_column)
     """
-    df = pd.read_excel(file_path)
+    # Determine file type and read accordingly
+    if file_path.lower().endswith('.csv'):
+        df = pd.read_csv(file_path)
+    elif file_path.lower().endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(file_path)
+    else:
+        raise ValueError(f"Unsupported file format. Please use CSV (.csv) or Excel (.xlsx, .xls) files.")
+    # Validate required columns exist in the file
     if Title_name not in df.columns or Abstract_name not in df.columns or Abstract_ID_name not in df.columns:
         raise ValueError(f"Columns '{Title_name}', '{Abstract_name}', '{Abstract_ID_name}' must be present in the Excel file.")
     
