@@ -936,14 +936,24 @@ class SessionCreatorApp:
         
         ttk.Label(threshold_frame, text="Similarity Threshold:").pack(side=tk.LEFT)
         threshold_scale = ttk.Scale(threshold_frame, from_=0.0, to=1.0, 
-                                   variable=self.similarity_threshold_var, orient=tk.HORIZONTAL)
+                                   variable=self.similarity_threshold_var, orient=tk.HORIZONTAL,
+                                   command=self.update_threshold_display)
         threshold_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 10))
         
-        threshold_label = ttk.Label(threshold_frame, text="0.99")
-        threshold_label.pack(side=tk.RIGHT)
+        self.threshold_label = ttk.Label(threshold_frame, text=f"{self.similarity_threshold_var.get():.2f}")
+        self.threshold_label.pack(side=tk.RIGHT)
         
-        remove_btn = ttk.Button(duplicates_frame, text="Remove Duplicates")
-        remove_btn.pack()
+        # Status section for duplicates
+        duplicates_status_frame = ttk.Frame(duplicates_frame)
+        duplicates_status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(duplicates_status_frame, text="Status:").pack(side=tk.LEFT)
+        self.duplicates_status_label = ttk.Label(duplicates_status_frame, text="Ready to check for duplicates", foreground="blue")
+        self.duplicates_status_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        self.remove_duplicates_btn = ttk.Button(duplicates_frame, text="Remove Duplicates", 
+                                               command=self.remove_duplicates)
+        self.remove_duplicates_btn.pack()
         
         # Session Creation Section
         session_frame = ttk.LabelFrame(parent, text="Session Creation", padding="10")
@@ -1025,6 +1035,80 @@ class SessionCreatorApp:
         
         export_btn = ttk.Button(export_frame, text="Export Spreadsheets")
         export_btn.pack()
+    
+    def update_threshold_display(self, value):
+        """Update the threshold display label when scale changes"""
+        self.threshold_label.config(text=f"{float(value):.2f}")
+
+    def remove_duplicates(self):
+        """Remove duplicate presentations based on similarity threshold"""
+        # Check if we have normal presentations data and embeddings
+        if not hasattr(self, 'normal_presentations_data') or not self.normal_presentations_data:
+            messagebox.showwarning("No Data", "Please load normal presentations data first.")
+            return
+        
+        if not hasattr(self, 'normal_embeddings') or self.normal_embeddings is None:
+            messagebox.showwarning("No Analysis", "Please analyze normal presentations first to generate embeddings.")
+            return
+        
+        try:
+            self.log_status("Starting duplicate removal process...")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Disable button during processing
+            self.remove_duplicates_btn.config(state='disabled', text="Removing...")
+            self.duplicates_status_label.config(text="Processing...", foreground="orange")
+            
+            # Get current threshold value
+            threshold = self.similarity_threshold_var.get()
+            
+            # Get the processed dataframe and embeddings
+            df_presentations = self.normal_presentations_data['processed_dataframe']
+            df_embeddings = self.normal_embeddings
+            
+            self.root.update()
+            
+            # Log initial counts
+            initial_count = len(df_presentations)
+            self.log_status(f"Initial presentation count: {initial_count}")
+            self.log_status(f"Using similarity threshold: {threshold:.2f}")
+            
+            # Remove duplicates using session_organizer function
+            df_presentations_clean, df_embeddings_clean = session_organizer.remove_duplicates(
+                df_presentations, df_embeddings, self.embedding_model.similarity, threshold=threshold
+            )
+            
+            # Update stored data with cleaned versions
+            self.normal_presentations_data['processed_dataframe'] = df_presentations_clean
+            self.normal_embeddings = df_embeddings_clean
+            
+            # Log results
+            final_count = len(df_presentations_clean)
+            removed_count = initial_count - final_count
+            
+            self.log_status(f"✓ Duplicate removal complete")
+            self.log_status(f"Removed {removed_count} duplicate presentations")
+            self.log_status(f"Final presentation count: {final_count}")
+            
+            # Update status
+            if removed_count > 0:
+                status_text = f"Removed {removed_count} duplicates ({final_count} remaining)"
+                self.duplicates_status_label.config(text=status_text, foreground="green")
+            else:
+                self.duplicates_status_label.config(text="No duplicates found", foreground="green")
+            
+            # Re-enable button
+            self.remove_duplicates_btn.config(state='normal', text="Remove Duplicates")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error during duplicate removal: {str(e)}")
+            self.duplicates_status_label.config(text="Error occurred", foreground="red")
+            self.remove_duplicates_btn.config(state='normal', text="Remove Duplicates")
+            messagebox.showerror("Duplicate Removal Error", f"Failed to remove duplicates:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
 
     def run(self):
         self.root.mainloop()
