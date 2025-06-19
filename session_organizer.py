@@ -16,10 +16,15 @@ from dotenv import load_dotenv
 COLUMNS = {
     'EMBEDDING_MODEL': 'embedding_model',
     'SESSION_SIZE': 'session_size',
-    'PRESENTATION_INDICES': 'presentation_indices',
+    'GEN_PRESENTATION_INDICES': 'gen_presentation_indices',
     'CLUSTER_ID': 'cluster_id',
     'HYBRID_SESSION_TITLE': 'hybrid_session_title',
+    'HYBRID_INVITED_PRESENTATIONS': 'hybrid_invited_presentations',
+    'SESSION_TITLE': 'session_title',
+    'FINAL_SESSION_TITLE': 'final_session_title',
 }
+
+UNSET_SESSION_TITLE_TEXT = "Not Set Yet"
 
 #Helper functions
 def create_index_mappings(df):
@@ -269,99 +274,73 @@ def cde_embed_documents(df_presentations, topic_column, cde_embeddings_model, mo
 
     return df_presentation_embeddings
 
-def calculate_similarity_matrix(df_embeddings, df_presentations, embedding_model):
-    """
-    Calculate the similarity matrix from the embeddings DataFrame.
-    Args:
-        df_embeddings (pd.DataFrame): DataFrame containing the embeddings.
-        df_presentations (pd.DataFrame): DataFrame containing the presentations.
-        embedding_model (SentenceTransformer): The SentenceTransformer model to use for calculating similarities.
-    Returns:
-        pd.DataFrame: DataFrame containing the similarity matrix.
-    """
-    presentation_similarities = embedding_model.similarity(df_embeddings.values, df_embeddings.values)
-    # Convert similarity matrix to a dataframe (will use dataframe as it is easier to drop index values)
-    df_presentation_similarities = pd.DataFrame(presentation_similarities.cpu(), index = df_presentations.index, columns=df_presentations.index)
-    return df_presentation_similarities
-
-# TODO: It may be good to return the number of presentations removed. Also, maybe the similarity and the presentations removed.
-def remove_duplicates(df_presentations, df_similarities, df_embeddings, threshold=0.95):
+def remove_duplicates(df_presentations, df_embeddings, similarity_func, threshold=0.95):
     """
     Remove near-duplicate rows based on a similarity threshold.
     Args:
         df_presentations (pd.DataFrame): DataFrame containing presentation data.
-        df_similarities (pd.DataFrame): DataFrame containing similarity scores.
+        df_embeddings (pd.DataFrame): DataFrame containing presentation embeddings.
+        similarity_func (callable): Function to compute similarity between embeddings.
         threshold (float): Similarity threshold for considering items as near duplicates.
     Returns:
         pd.DataFrame: Presentations DataFrame with near-duplicate rows removed.
-        pd.DataFrame: Similarities DataFrame with near-duplicate rows and columns removed.
         pd.DataFrame: Embeddings DataFrame with near-duplicate rows removed.
     """
     # Get the indices from the dataframe (important for referencing)
-    presentation_indices = df_similarities.index.tolist()
-    index_map = {i: idx for i, idx in enumerate(presentation_indices)} # Map position to actual index
-
+    presentation_indices = df_presentations.index.tolist()
+    embeddings_array = df_embeddings.drop(columns=[COLUMNS['EMBEDDING_MODEL']]).values
+    
     # Create a set to store the indices we want to REMOVE
     indices_to_remove = set()
-
-    # Iterate through the upper triangle of the similarity matrix to avoid redundant checks and self-comparison
-    # Use iloc for positional indexing which is often faster for loops
-    similarity_matrix_np = df_similarities.values # Get numpy array for faster access
+    
+    # Calculate the similarity matrix for the embeddings
+    similarity_matrix_np = similarity_func(embeddings_array, embeddings_array)
+    
+    # Convert to numpy if it's a torch tensor
+    if hasattr(similarity_matrix_np, 'cpu'):
+        similarity_matrix_np = similarity_matrix_np.cpu().numpy()
+    elif hasattr(similarity_matrix_np, 'numpy'):
+        similarity_matrix_np = similarity_matrix_np.numpy()
+    
+    # Iterate through the upper triangle of the similarity matrix
     num_items = similarity_matrix_np.shape[0]
 
     for i in range(num_items):
-        for j in range(i + 1, num_items): # Start j from i+1 to get upper triangle
-            similarity_score = similarity_matrix_np[i, j]
-
-            if similarity_score >= threshold:
-                # Found a near-duplicate pair
-                index_i = index_map[i] # Get the actual index value
-                index_j = index_map[j] # Get the actual index value
-
-                # Identify the index to remove (the one with the lower value)
-                index_to_drop = min(index_i, index_j)
-                index_to_keep = max(index_i, index_j)
-
-                # Add the lower index to the set for removal
-                indices_to_remove.add(index_to_drop)
-                # Optional: print information about the identified pair
-                # print(f"Near duplicate found: Index {index_i} and Index {index_j} (Similarity: {similarity_score:.4f}). Keeping {index_to_keep}, removing {index_to_drop}.")
-
+        for j in range(i + 1, num_items):
+            if similarity_matrix_np[i, j] >= threshold:
+                # Get the actual DataFrame indices for positions i and j
+                idx_i = presentation_indices[i]
+                idx_j = presentation_indices[j]
+                print(f"Near duplicate found: Index {idx_i} and Index {idx_j} (Similarity: {similarity_matrix_np[i, j]:.4f}).")
+                # Remove the item with the LOWER index (keep the higher one)
+                if idx_i < idx_j:
+                    indices_to_remove.add(idx_i)
+                else:
+                    indices_to_remove.add(idx_j)
 
     # Convert the set of indices to remove into a list
-    indices_to_remove_list = sorted(list(indices_to_remove)) # Sorting is optional but good practice
+    indices_to_remove_list = sorted(list(indices_to_remove))
 
     print(f"\nFound {len(indices_to_remove_list)} near-duplicate presentations to remove (keeping highest index).")
     print(f"Indices to remove: {indices_to_remove_list}")
 
     # --- Perform the removal ---
-
-    # Keep only the rows whose indices are NOT in the removal list
     df_presentations = df_presentations.drop(index=indices_to_remove_list)
     df_embeddings = df_embeddings.drop(index=indices_to_remove_list)
 
-    # For the square similarity matrix, remove both rows and columns
-    df_similarities = df_similarities.drop(index=indices_to_remove_list, columns=indices_to_remove_list)
-
     # --- Verification ---
     print(f"\nFinal number of oral presentations: {len(df_presentations)}")
-    print(f"Final shape of similarities matrix: {df_similarities.shape}")
     print(f"Final shape of embeddings matrix: {df_embeddings.shape}")
 
     # Verify indices still match
     if not df_presentations.index.equals(df_embeddings.index):
-        raise ValueError("Warning: Indices of df_presentations and df_presentation_embeddings do not match!!")
-    if not df_presentations.index.equals(df_similarities.index):
-        raise ValueError("Warning: Row indices of df_presentations and df_presentation_similarities do not match!")
-    if not df_similarities.index.equals(df_similarities.columns):
-        raise ValueError("Warning: Row and Column indices of df_presentation_similarities do not match!")
-
+        raise ValueError("DataFrame indices don't match after duplicate removal!")
 
     # Reset the index of the DataFrames to ensure they are clean and sequential
-    df_presentations = df_presentations.reset_index()
-    df_similarities.reset_index(drop=True, inplace=True)
-    df_embeddings.reset_index(drop=True, inplace=True)
-    return df_presentations, df_similarities, df_embeddings
+    df_presentations = df_presentations.reset_index(drop=True)
+    df_embeddings = df_embeddings.reset_index(drop=True)
+    
+    return df_presentations, df_embeddings
 
 def create_sessions(df_presentations, df_presentation_similarities, df_presentation_embeddings, 
                    max_sessions=100, min_session_size=8, tree_merge_stop=0.95, cluster_column_name="Session"):
@@ -599,7 +578,8 @@ def get_unique_top_indices_variable(data_array, target_counts):
 
 def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_embeddings, 
                              df_hybrid_presentations=None, hybrid_session_column=None, df_hybrid_embeddings=None, 
-                   max_sessions=100, min_session_size=8, tree_merge_stop=0.95, cluster_column_name="Session"):
+                   max_sessions=100, min_session_size=8, tree_merge_stop=0.95, cluster_column_name="Session Code",
+                   final_session_title_column="Final Session Title"):
     """
     Create sessions from the presentations based on their embeddings and similarities. It is optional to consider hybrid sessions.
     If hybrid sessions are provided, they will be filled first before clustering the remaining presentations. This means that hybrid
@@ -619,6 +599,7 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
         min_session_size (int): Minimum number of presentations in a session.
         tree_merge_stop (float): The fraction of the tree to stop clustering at.
         cluster_column_name (str): The name of the column to store cluster labels.
+        final_session_title_column (str): The name of the column to store the final session titles.
 
     Returns:
         tuple: (df_presentations, df_sessions, labels, metadata)
@@ -655,6 +636,8 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
 
     assigned_positions = set()  # Track which array positions are assigned
     final_clusters = []  # Will store array positions, convert to DF indices at the end
+    hybrid_cluster_presentations = []  # Will store DataFrame indices of hybrid presentations in each cluster
+    hybrid_session_titles = []  # Will store the session titles for hybrid sessions
         
     # Hybrid Sessions are optional, so check if they are provided
     if df_hybrid_presentations is not None and df_hybrid_embeddings is not None and hybrid_session_column is not None:
@@ -704,12 +687,12 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
             existing_hybrid_df_indices = df_hybrid_presentations[
                 df_hybrid_presentations[hybrid_session_column] == session_name
             ].index.tolist()
-            
             final_clusters.append(list(additional_positions))
-            
+            hybrid_cluster_presentations.append(existing_hybrid_df_indices)
+            hybrid_session_titles.append(session_name)  # Store the session title
             # Mark all these positions as assigned
             assigned_positions.update(list(additional_positions))
-        
+    
     # Create filtered embeddings and similarity matrix for unassigned presentations
     unassigned_positions = [i for i in range(len(embeddings_array)) if i not in assigned_positions]
 
@@ -770,6 +753,9 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
                     # Convert filtered positions back to original array positions
                     original_positions = [filtered_to_original[pos] for pos in unassigned_leaves[i]]
                     final_clusters.append(original_positions)
+                    # For non-hybrid clusters, add empty list for hybrid presentations
+                    hybrid_cluster_presentations.append([])
+                    hybrid_session_titles.append(UNSET_SESSION_TITLE_TEXT)  # Non-hybrid sessions get default title
                     unassigned_count[i] = 0
                     unassigned_leaves[i] = []
             
@@ -778,6 +764,10 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
                 # Convert to original positions
                 remaining_original = [filtered_to_original[pos] for pos in unassigned_leaves[-1]]
                 final_clusters = _assign_remaining_items(remaining_original, final_clusters, similarity_matrix)
+                # If we added any new clusters in _assign_remaining_items, we need to add empty hybrid lists and titles
+                while len(hybrid_cluster_presentations) < len(final_clusters):
+                    hybrid_cluster_presentations.append([])
+                    hybrid_session_titles.append(UNSET_SESSION_TITLE_TEXT)
 
     # Convert all final_clusters from array positions to DataFrame indices
     final_clusters_df_indices = []
@@ -785,14 +775,17 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
         cluster_df_indices = array_positions_to_df_indices(cluster_positions, pres_pos_to_idx)
         final_clusters_df_indices.append(cluster_df_indices)
 
-    # Create outputs using DataFrame indices
+    # Create outputs using DataFrame indices and pass hybrid information
     df_result, df_sessions, labels, metadata = _create_output_structures_with_df_indices(
-        final_clusters_df_indices, df_presentations, cluster_column_name
+        final_clusters_df_indices, df_presentations, cluster_column_name, 
+        hybrid_cluster_presentations, hybrid_session_titles, final_session_title_column
     )
 
     return df_result, df_sessions, labels, metadata
 
-def _create_output_structures_with_df_indices(final_clusters_df_indices, df_presentations, cluster_column_name):
+def _create_output_structures_with_df_indices(final_clusters_df_indices, df_presentations, cluster_column_name, 
+                                            hybrid_cluster_presentations=None, hybrid_session_titles=None, 
+                                            final_session_title_column="Final Session Title"):
     """
     Create output structures using DataFrame indices instead of array positions.
     """
@@ -810,10 +803,22 @@ def _create_output_structures_with_df_indices(final_clusters_df_indices, df_pres
     # Create sessions summary
     session_data = []
     for cluster_id, df_indices in enumerate(final_clusters_df_indices):
+        # Get hybrid presentations for this cluster (if any)
+        hybrid_presentations = []
+        if hybrid_cluster_presentations and cluster_id < len(hybrid_cluster_presentations):
+            hybrid_presentations = hybrid_cluster_presentations[cluster_id]
+        
+        # Get session title for this cluster
+        session_title = UNSET_SESSION_TITLE_TEXT  # Default value
+        if hybrid_session_titles and cluster_id < len(hybrid_session_titles):
+            session_title = hybrid_session_titles[cluster_id]
+        
         session_data.append({
-            'cluster_id': cluster_id,
+            COLUMNS['CLUSTER_ID']: cluster_id,
             COLUMNS['SESSION_SIZE']: len(df_indices),
-            COLUMNS['PRESENTATION_INDICES']: df_indices
+            COLUMNS['GEN_PRESENTATION_INDICES']: df_indices,
+            COLUMNS['HYBRID_INVITED_PRESENTATIONS']: hybrid_presentations,
+            final_session_title_column: session_title,
         })
     
     df_sessions = pd.DataFrame(session_data)
@@ -830,6 +835,7 @@ def _create_output_structures_with_df_indices(final_clusters_df_indices, df_pres
     }
     
     return df_result, df_sessions, labels, metadata
+
 
 def _assign_remaining_items(remaining_positions, final_clusters, similarity_matrix):
     """
@@ -876,7 +882,7 @@ def calculate_avg_similarity(df_sessions, similarity_matrix):
     avg_similarities = []
     
     for _, row in df_sessions.iterrows():
-        cluster_indices = row[COLUMNS['PRESENTATION_INDICES']]
+        cluster_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
         
         if len(cluster_indices) < 2:
             # Single item clusters have no internal similarity
@@ -897,44 +903,46 @@ def calculate_avg_similarity(df_sessions, similarity_matrix):
     
     return avg_similarities
 
-def calculate_silhouette_scores(df_sessions, embeddings_array, labels):
+def calculate_silhouette_scores(df_sessions, similarity_array, labels, ):
     """
-    Calculate silhouette scores for each cluster.
+    Calculate silhouette scores using the same similarity function as the embedding model.
     
     Args:
         df_sessions (pd.DataFrame): DataFrame with cluster assignments
-        embeddings_array (np.ndarray): Array of embeddings
+        similarity_array (np.ndarray): Precomputed similarity matrix
         labels (list): List of cluster labels for each presentation
-        
+
+
     Returns:
         list: Silhouette scores for each cluster
     """
-    from sklearn.metrics import silhouette_score, silhouette_samples
-    from sklearn.metrics.pairwise import cosine_distances
+    from sklearn.metrics import silhouette_samples
     
     # Convert labels to numpy array and handle unassigned items
     labels_array = np.array(labels)
+
+    # Convert similarity to distance: distance = 1 - similarity
+    # Ensure diagonal is exactly 0 for numerical stability
+    distance_matrix = 1 - similarity_array
+    np.fill_diagonal(distance_matrix, 0)
     
     # Only calculate silhouette for assigned items (exclude -1 labels)
     assigned_mask = labels_array != -1
     
     if np.sum(assigned_mask) < 2:
-        # Need at least 2 assigned items
         return [np.nan] * len(df_sessions)
     
-    assigned_embeddings = embeddings_array[assigned_mask]
+    # Filter distance matrix and labels for assigned items
+    distance_matrix = distance_matrix[assigned_mask][:, assigned_mask]
     assigned_labels = labels_array[assigned_mask]
     
     # Check if we have at least 2 different clusters
     unique_labels = np.unique(assigned_labels)
     if len(unique_labels) < 2:
         return [np.nan] * len(df_sessions)
-    
-    # Calculate distances using cosine distance
-    distances = cosine_distances(assigned_embeddings)
-    
+       
     # Calculate silhouette scores for each sample
-    sample_scores = silhouette_samples(distances, assigned_labels, metric='precomputed')
+    sample_scores = silhouette_samples(distance_matrix, assigned_labels, metric='precomputed')
     
     # Calculate average silhouette score for each cluster
     cluster_silhouette_scores = []
@@ -1084,8 +1092,8 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
     # Create sessions dictionary from df_sessions
     sessions_dict = {}
     for _, row in df_sessions.iterrows():
-        session_num = row["cluster_id"]
-        presentation_indices = row["presentation_indices"]
+        session_num = row[COLUMNS['CLUSTER_ID']]
+        presentation_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
         
         sessions_dict[session_num] = {
             "Indices": presentation_indices,
@@ -1181,7 +1189,7 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
     keywords_list = []
     
     for _, row in df_sessions_with_titles.iterrows():
-        session_id = row["cluster_id"]
+        session_id = row[COLUMNS['CLUSTER_ID']]
         if session_id in sessions_dict:
             title_1_list.append(sessions_dict[session_id].get("Ollama Title 1", "No Title Generated"))
             title_2_list.append(sessions_dict[session_id].get("Ollama Title 2", "No Title Generated"))
@@ -1243,8 +1251,8 @@ def generate_session_titles_and_keywords_gemini(
     # Create sessions dictionary from df_sessions
     sessions_dict = {}
     for _, row in df_sessions.iterrows():
-        session_num = row["cluster_id"]
-        presentation_indices = row["presentation_indices"]
+        session_num = row[COLUMNS['CLUSTER_ID']]
+        presentation_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
 
         sessions_dict[session_num] = {
             "Indices": presentation_indices,
@@ -1324,7 +1332,7 @@ def generate_session_titles_and_keywords_gemini(
     keywords_list = []
 
     for _, row in df_sessions_with_titles.iterrows():
-        session_id = row["cluster_id"]
+        session_id = row[COLUMNS['CLUSTER_ID']]
         if session_id in sessions_dict:
             title_1_list.append(
                 sessions_dict[session_id].get("Gemini Title 1", "No Title Generated")
@@ -1398,8 +1406,8 @@ def generate_session_titles_and_keywords_llama_local(
     # Create sessions dictionary from df_sessions
     sessions_dict = {}
     for _, row in df_sessions.iterrows():
-        session_num = row["cluster_id"]
-        presentation_indices = row["presentation_indices"]
+        session_num = row[COLUMNS['CLUSTER_ID']]
+        presentation_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
 
         sessions_dict[session_num] = {
             "Indices": presentation_indices,
@@ -1507,7 +1515,7 @@ def generate_session_titles_and_keywords_llama_local(
     keywords_list = []
 
     for _, row in df_sessions_with_titles.iterrows():
-        session_id = row["cluster_id"]
+        session_id = row[COLUMNS['CLUSTER_ID']]
         if session_id in sessions_dict:
             title_1_list.append(
                 sessions_dict[session_id].get("Llama Title 1", "No Title Generated")
@@ -1594,8 +1602,8 @@ def find_most_similar_committees_by_presentations(
     results = []
 
     for _, cluster_row in df_sessions.iterrows():
-        session_id = cluster_row["cluster_id"]
-        presentation_indices = cluster_row["presentation_indices"]
+        session_id = cluster_row[COLUMNS['CLUSTER_ID']]
+        presentation_indices = cluster_row[COLUMNS['GEN_PRESENTATION_INDICES']]
 
         if len(presentation_indices) == 0:
             continue
@@ -1666,7 +1674,7 @@ def add_committee_matches_to_clusters(df_sessions, session_committee_matches):
 
     # Merge with clusters
     return df_sessions.merge(
-        committee_pivot, left_on="cluster_id", right_index=True, how="left"
+        committee_pivot, left_on=COLUMNS['CLUSTER_ID'], right_index=True, how="left"
     )
 
 def load_hybrid_sessions(file_path, Session_column='Session', Title_column='Title', Abstract_column='Abstract', 
@@ -1741,7 +1749,7 @@ def load_hybrid_sessions(file_path, Session_column='Session', Title_column='Titl
         
         session_data.append({
             COLUMNS['CLUSTER_ID']: cluster_id,  # Use integer ID starting from 1
-            COLUMNS['PRESENTATION_INDICES']: presentation_indices,
+            COLUMNS['GEN_PRESENTATION_INDICES']: presentation_indices,
             COLUMNS['SESSION_SIZE']: len(presentation_indices),
             COLUMNS['HYBRID_SESSION_TITLE']: session_name  # Keep original session name as title
         })
