@@ -1,10 +1,69 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
+import sys
+from io import StringIO
 import pandas as pd
-import os
-import requests
+import numpy as np
 from sentence_transformers import SentenceTransformer
 import session_organizer
+import threading
+import time
+import os
+import requests
+
+class PrintCapture:
+    """Context manager to capture print statements and redirect them to a callback"""
+    def __init__(self, callback, root=None):
+        self.callback = callback
+        self.root = root
+        self.old_stdout = None
+        self.string_io = None
+        self.buffer = []
+        
+    def __enter__(self):
+        self.old_stdout = sys.stdout
+        self.string_io = StringIO()
+        sys.stdout = self
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout = self.old_stdout
+        # Process any remaining buffer
+        self.flush()
+    
+    def write(self, text):
+        # Write to original stdout as well (for debugging)
+        self.old_stdout.write(text)
+        self.old_stdout.flush()
+        
+        # Add to buffer
+        self.buffer.append(text)
+        
+        # If we have complete lines, process them
+        if '\n' in text:
+            self.flush()
+    
+    def flush(self):
+        if self.buffer:
+            # Join buffer and split into lines
+            full_text = ''.join(self.buffer)
+            self.buffer = []
+            
+            lines = full_text.split('\n')
+            
+            # Keep incomplete line in buffer
+            if lines and not full_text.endswith('\n'):
+                self.buffer = [lines[-1]]
+                lines = lines[:-1]
+            
+            # Send complete lines to callback
+            for line in lines:
+                if line.strip():  # Only send non-empty lines
+                    if self.root:
+                        # Schedule callback on main thread
+                        self.root.after(0, lambda l=line.strip(): self.callback(l))
+                    else:
+                        self.callback(line.strip())
 
 class BaseDataDialog:
     """Base class for data loading dialogs"""
@@ -438,6 +497,11 @@ class SessionCreatorApp:
         analysis_tab = ttk.Frame(notebook)
         notebook.add(analysis_tab, text="Analysis & Export")
         self.create_analysis_tab(analysis_tab)
+
+        # Tab 4: Data Viewer
+        viewer_tab = ttk.Frame(notebook)
+        notebook.add(viewer_tab, text="Data Viewer")
+        self.create_data_viewer_tab(viewer_tab)
         
         # Bottom section - Progress and Status (always visible)
         bottom_frame = ttk.Frame(main_frame)
@@ -629,9 +693,10 @@ class SessionCreatorApp:
             
             # Generate embeddings using the processed dataframe
             self.log_status("Generating embeddings for normal presentations...")
-            self.normal_embeddings = session_organizer.embed_documents(
-                df_processed, topic_column, self.embedding_model
-            )
+            with PrintCapture(self.log_status, self.root):
+                self.normal_embeddings = session_organizer.embed_documents(
+                    df_processed, topic_column, self.embedding_model
+                )
             
             # Update status
             self.normal_analyzed.set(True)
@@ -678,9 +743,10 @@ class SessionCreatorApp:
             
             # Generate embeddings using the processed dataframe
             self.log_status("Generating embeddings for hybrid presentations...")
-            self.hybrid_embeddings = session_organizer.embed_documents(
-                df_processed, topic_column, self.embedding_model
-            )
+            with PrintCapture(self.log_status, self.root):
+                self.hybrid_embeddings = session_organizer.embed_documents(
+                    df_processed, topic_column, self.embedding_model
+                )
             
             # Update status
             self.hybrid_analyzed.set(True)
@@ -720,9 +786,10 @@ class SessionCreatorApp:
             
             # Generate embeddings using the processed dataframe
             self.log_status("Generating embeddings for committees...")
-            self.committee_embeddings = session_organizer.embed_documents(
-                df_processed, topic_column, self.embedding_model
-            )
+            with PrintCapture(self.log_status, self.root):
+                self.committee_embeddings = session_organizer.embed_documents(
+                    df_processed, topic_column, self.embedding_model
+                )
             
             # Update status
             self.committees_analyzed.set(True)
@@ -886,8 +953,9 @@ class SessionCreatorApp:
             self.root.update()
             
             # Load the model
-            self.embedding_model = SentenceTransformer(model_name, trust_remote_code=True)
-            
+            with PrintCapture(self.log_status, self.root):
+                self.embedding_model = SentenceTransformer(model_name, trust_remote_code=True)
+
             # Get model information
             if hasattr(self.embedding_model, 'model_card_data') and self.embedding_model.model_card_data:
                 base_model = getattr(self.embedding_model.model_card_data, 'base_model', 'Unknown')
@@ -935,13 +1003,20 @@ class SessionCreatorApp:
         self.log_status("Start by selecting and loading an embedding model.")
     
     def log_status(self, message):
-        """Add a message to the status log"""
-        if self.status_text:
-            self.status_text.config(state='normal')
-            self.status_text.insert(tk.END, f"{message}\n")
-            self.status_text.see(tk.END)  # Scroll to bottom
-            self.status_text.config(state='disabled')
-            self.root.update_idletasks()  # Update GUI immediately
+        """Add a status message to the log"""
+        timestamp = time.strftime("%H:%M:%S")
+        formatted_message = f"[{timestamp}] {message}"
+        
+        # Add to the text widget
+        self.status_text.config(state='normal')
+        self.status_text.insert(tk.END, formatted_message + "\n")
+        self.status_text.config(state='disabled')
+        
+        # Auto-scroll to bottom
+        self.status_text.see(tk.END)
+        
+        # Force GUI update
+        self.root.update_idletasks()
 
     def create_processing_tab(self, parent):
         """Create the processing tab"""
@@ -1112,12 +1187,14 @@ class SessionCreatorApp:
             if not api_key:
                 messagebox.showwarning("API Key Required", "Please enter an API key for online model usage.")
                 return
+        else:
+            api_key = None  # No API key needed for local models
             
-            # Set environment variable for API key
-            import os
-            if selected_model == "gemini-2.0-flash":
-                os.environ["GEMINI_API_KEY"] = api_key
-            # Add other API key mappings as needed
+            # # Set environment variable for API key
+            # import os
+            # if selected_model == "gemini-2.0-flash":
+            #     os.environ["GEMINI_API_KEY"] = api_key
+            # # Add other API key mappings as needed
         
         try:
             self.log_status("Starting title and keyword generation...")
@@ -1140,13 +1217,15 @@ class SessionCreatorApp:
             self.log_status(f"Generating titles for {len(self.df_sessions)} sessions...")
             
             # Call the session_organizer function
-            df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
-                df_sessions=self.df_sessions,
-                df_presentations=df_presentations,
-                topic_column=topic_column,
-                model_name=model_name,
-                prompt_template=None  # Use default prompt
-            )
+            with PrintCapture(self.log_status, self.root):
+                df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
+                    df_sessions=self.df_sessions,
+                    df_presentations=df_presentations,
+                    topic_column=topic_column,
+                    model_name=model_name,
+                    prompt_template=None,  # Use default prompt
+                    api_key=api_key
+                )
             
             # Update stored sessions data
             self.df_sessions = df_sessions_with_titles
@@ -1211,9 +1290,10 @@ class SessionCreatorApp:
             self.log_status(f"Using similarity threshold: {threshold:.2f}")
             
             # Remove duplicates using session_organizer function
-            df_presentations_clean, df_embeddings_clean = session_organizer.remove_duplicates(
-                df_presentations, df_embeddings, self.embedding_model.similarity, threshold=threshold
-            )
+            with PrintCapture(self.log_status, self.root):
+                df_presentations_clean, df_embeddings_clean = session_organizer.remove_duplicates(
+                    df_presentations, df_embeddings, self.embedding_model.similarity, threshold=threshold
+                )
             
             # Update stored data with cleaned versions
             self.normal_presentations_data['processed_dataframe'] = df_presentations_clean
@@ -1299,19 +1379,20 @@ class SessionCreatorApp:
                 self.log_status(f"Including {len(df_hybrid_presentations)} hybrid presentations...")
             
             # Create sessions using session_organizer
-            df_result, df_sessions, labels, metadata = session_organizer.create_sessions_w_hybrid(
-                df_presentations=df_presentations,
-                similarity_func=self.embedding_model.similarity,
-                df_presentation_embeddings=df_embeddings,
-                df_hybrid_presentations=df_hybrid_presentations,
-                hybrid_session_column=hybrid_session_column,
-                df_hybrid_embeddings=df_hybrid_embeddings,
-                max_sessions=max_sessions,
-                min_session_size=min_session_size,
-                tree_merge_stop=0.95,  # Could make this configurable later
-                cluster_column_name="Session Code",
-                final_session_title_column="Final Session Title"
-            )
+            with PrintCapture(self.log_status, self.root):
+                df_result, df_sessions, labels, metadata = session_organizer.create_sessions_w_hybrid(
+                    df_presentations=df_presentations,
+                    similarity_func=self.embedding_model.similarity,
+                    df_presentation_embeddings=df_embeddings,
+                    df_hybrid_presentations=df_hybrid_presentations,
+                    hybrid_session_column=hybrid_session_column,
+                    df_hybrid_embeddings=df_hybrid_embeddings,
+                    max_sessions=max_sessions,
+                    min_session_size=min_session_size,
+                    tree_merge_stop=0.95,  # Could make this configurable later
+                    cluster_column_name="Session Code",
+                    final_session_title_column="Final Session Title"
+                )
             
             # Store results
             self.normal_presentations_data['processed_dataframe'] = df_result  # Update with session assignments
@@ -1366,9 +1447,6 @@ class SessionCreatorApp:
             return False, "Embedding model not loaded"
         
         return True, "Ready to create sessions"
-
-    def run(self):
-        self.root.mainloop()
 
     def check_ollama_availability(self):
         """Check if Ollama server is available and get available models"""
@@ -1435,6 +1513,303 @@ class SessionCreatorApp:
             if hasattr(self, 'api_entry'):
                 self.api_entry.config(state='normal')
                 self.api_key_label.config(text="API Key:", foreground="black")
+    
+    def create_data_viewer_tab(self, parent):
+        """Create the data viewer tab"""
+        # Top frame for controls
+        controls_frame = ttk.Frame(parent)
+        controls_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # DataFrame selection
+        selection_frame = ttk.LabelFrame(controls_frame, text="Select DataFrame", padding="10")
+        selection_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Dropdown for dataframe selection
+        df_select_frame = ttk.Frame(selection_frame)
+        df_select_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(df_select_frame, text="DataFrame:").pack(side=tk.LEFT)
+        self.df_selection_var = tk.StringVar()
+        self.df_selection_combo = ttk.Combobox(df_select_frame, textvariable=self.df_selection_var, 
+                                            state='readonly', width=40)
+        self.df_selection_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 10))
+        self.df_selection_combo.bind('<<ComboboxSelected>>', self.on_dataframe_selection_changed)
+        
+        # Refresh and Export buttons
+        buttons_frame = ttk.Frame(selection_frame)
+        buttons_frame.pack(fill=tk.X)
+        
+        refresh_btn = ttk.Button(buttons_frame, text="Refresh List", command=self.refresh_dataframe_list)
+        refresh_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.export_csv_btn = ttk.Button(buttons_frame, text="Export to CSV", 
+                                        command=self.export_selected_dataframe, state='disabled')
+        self.export_csv_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Info label
+        self.df_info_var = tk.StringVar(value="Select a DataFrame to view")
+        info_label = ttk.Label(selection_frame, textvariable=self.df_info_var, foreground="gray")
+        info_label.pack(anchor=tk.W, pady=(5, 0))
+        
+        # Data display frame
+        display_frame = ttk.LabelFrame(parent, text="Data Preview", padding="10")
+        display_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create treeview for data display
+        self.data_tree = ttk.Treeview(display_frame, show='headings', height=15)
+        
+        # Scrollbars for the treeview
+        v_scrollbar = ttk.Scrollbar(display_frame, orient=tk.VERTICAL, command=self.data_tree.yview)
+        h_scrollbar = ttk.Scrollbar(display_frame, orient=tk.HORIZONTAL, command=self.data_tree.xview)
+        self.data_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        # Pack treeview and scrollbars
+        self.data_tree.grid(row=0, column=0, sticky='nsew')
+        v_scrollbar.grid(row=0, column=1, sticky='ns')
+        h_scrollbar.grid(row=1, column=0, sticky='ew')
+        
+        # Configure grid weights
+        display_frame.grid_rowconfigure(0, weight=1)
+        display_frame.grid_columnconfigure(0, weight=1)
+        
+        # Initially populate the dataframe list
+        self.refresh_dataframe_list()
+    
+    def refresh_dataframe_list(self):
+        """Refresh the list of available dataframes"""
+        dataframes = []
+        
+        # Check for normal presentations data
+        if hasattr(self, 'normal_presentations_data') and self.normal_presentations_data:
+            if 'processed_dataframe' in self.normal_presentations_data:
+                dataframes.append(("Normal Presentations (Processed)", "normal_processed"))
+            if 'dataframe' in self.normal_presentations_data:
+                dataframes.append(("Normal Presentations (Raw)", "normal_raw"))
+        
+        # Check for hybrid presentations data
+        if hasattr(self, 'hybrid_presentations_data') and self.hybrid_presentations_data:
+            if 'processed_dataframe' in self.hybrid_presentations_data:
+                dataframes.append(("Hybrid Presentations (Processed)", "hybrid_processed"))
+            if 'dataframe' in self.hybrid_presentations_data:
+                dataframes.append(("Hybrid Presentations (Raw)", "hybrid_raw"))
+            if 'sessions_dataframe' in self.hybrid_presentations_data:
+                dataframes.append(("Hybrid Sessions", "hybrid_sessions"))
+        
+        # Check for committee data
+        if hasattr(self, 'committee_data') and self.committee_data:
+            if 'processed_dataframe' in self.committee_data:
+                dataframes.append(("Committees (Processed)", "committee_processed"))
+            if 'dataframe' in self.committee_data:
+                dataframes.append(("Committees (Raw)", "committee_raw"))
+        
+        # Check for session data
+        if hasattr(self, 'df_sessions') and self.df_sessions is not None:
+            dataframes.append(("Created Sessions", "sessions"))
+        
+        # Update the combobox
+        if hasattr(self, 'df_selection_combo'):
+            display_names = [name for name, key in dataframes]
+            self.df_selection_combo['values'] = display_names
+            
+            # Store the mapping for later use
+            self.dataframe_mapping = {name: key for name, key in dataframes}
+            
+            # Clear current selection if the previously selected item is no longer available
+            current_selection = self.df_selection_var.get()
+            if current_selection not in display_names:
+                self.df_selection_var.set("")
+                self.clear_data_display()
+            
+            # Update info
+            if dataframes:
+                self.df_info_var.set(f"{len(dataframes)} DataFrame(s) available")
+            else:
+                self.df_info_var.set("No DataFrames available - load some data first")
+
+    def on_dataframe_selection_changed(self, event=None):
+        """Handle dataframe selection change"""
+        selected_name = self.df_selection_var.get()
+        if not selected_name or not hasattr(self, 'dataframe_mapping'):
+            return
+        
+        if selected_name not in self.dataframe_mapping:
+            return
+        
+        dataframe_key = self.dataframe_mapping[selected_name]
+        df = self.get_dataframe_by_key(dataframe_key)
+        
+        if df is not None:
+            self.display_dataframe(df, selected_name)
+            self.export_csv_btn.config(state='normal')
+        else:
+            self.clear_data_display()
+            self.export_csv_btn.config(state='disabled')
+
+    def get_dataframe_by_key(self, key):
+        """Get dataframe by its key identifier"""
+        try:
+            if key == "normal_processed":
+                return self.normal_presentations_data['processed_dataframe']
+            elif key == "normal_raw":
+                return self.normal_presentations_data['dataframe']
+            elif key == "hybrid_processed":
+                return self.hybrid_presentations_data['processed_dataframe']
+            elif key == "hybrid_raw":
+                return self.hybrid_presentations_data['dataframe']
+            elif key == "hybrid_sessions":
+                return self.hybrid_presentations_data['sessions_dataframe']
+            elif key == "committee_processed":
+                return self.committee_data['processed_dataframe']
+            elif key == "committee_raw":
+                return self.committee_data['dataframe']
+            elif key == "sessions":
+                return self.df_sessions
+            else:
+                return None
+        except (KeyError, AttributeError):
+            return None
+
+    def display_dataframe(self, df, name):
+        """Display the selected dataframe in the treeview"""
+        # Clear existing data
+        self.clear_data_display()
+        
+        if df is None or df.empty:
+            self.df_info_var.set(f"{name}: Empty DataFrame")
+            return
+        
+        # Update info
+        self.df_info_var.set(f"{name}: {len(df)} rows × {len(df.columns)} columns")
+        
+        # Set up columns
+        columns = list(df.columns)
+        self.data_tree['columns'] = columns
+        
+        # Configure columns
+        for col in columns:
+            self.data_tree.heading(col, text=col)
+            # Set column width based on content
+            max_width = max(len(str(col)), 10)  # Minimum width of 10
+            if not df[col].empty:
+                # Check a sample of values to estimate width
+                sample_values = df[col].head(10).astype(str)
+                if not sample_values.empty:
+                    max_content_width = max(len(str(val)) for val in sample_values)
+                    max_width = max(max_width, min(max_content_width, 30))  # Cap at 30 characters
+            
+            self.data_tree.column(col, width=max_width * 8, minwidth=80)  # Approximate pixel width
+        
+        # Insert data (limit to first 3000 rows for performance)
+        display_rows = min(len(df), 3000)
+        for idx, (_, row) in enumerate(df.head(display_rows).iterrows()):
+            values = []
+            for col in columns:
+                val = row[col]
+                # Handle different data types and truncate long strings
+                try:
+                    # Check if value is None, NaN, or similar scalar null values
+                    if val is None or (hasattr(val, 'size') and val.size == 1 and pd.isna(val)):
+                        display_val = ""
+                    # Handle arrays, lists, and other complex types
+                    elif hasattr(val, '__iter__') and not isinstance(val, (str, bytes)):
+                        # It's an iterable (list, array, etc.) but not a string
+                        if hasattr(val, 'shape') and len(val.shape) > 0:
+                            # It's a numpy array or similar
+                            if val.size == 0:
+                                display_val = "[]"
+                            else:
+                                display_val = str(val.tolist()) if hasattr(val, 'tolist') else str(list(val))
+                        else:
+                            display_val = str(list(val))
+                    else:
+                        # Regular scalar value
+                        if pd.isna(val):
+                            display_val = ""
+                        else:
+                            display_val = str(val)
+                    
+                    # Truncate very long values
+                    if len(display_val) > 100:
+                        display_val = display_val[:97] + "..."
+                        
+                except Exception as e:
+                    # Fallback for any unexpected data types
+                    display_val = f"<Error displaying value: {type(val).__name__}>"
+                
+                values.append(display_val)
+            
+            self.data_tree.insert('', 'end', values=values)
+        
+        # Update info if we're showing a subset
+        if len(df) > 3000:
+            current_info = self.df_info_var.get()
+            self.df_info_var.set(f"{current_info} (showing first 3000 rows)")
+    
+    def clear_data_display(self):
+        """Clear the data display"""
+        # Clear all items from treeview
+        for item in self.data_tree.get_children():
+            self.data_tree.delete(item)
+        
+        # Clear column configuration
+        self.data_tree['columns'] = ()
+
+    def export_selected_dataframe(self):
+        """Export the currently selected dataframe to CSV"""
+        selected_name = self.df_selection_var.get()
+        if not selected_name or not hasattr(self, 'dataframe_mapping'):
+            messagebox.showwarning("No Selection", "Please select a DataFrame to export.")
+            return
+        
+        if selected_name not in self.dataframe_mapping:
+            messagebox.showerror("Error", "Selected DataFrame is no longer available.")
+            return
+        
+        dataframe_key = self.dataframe_mapping[selected_name]
+        df = self.get_dataframe_by_key(dataframe_key)
+        
+        if df is None:
+            messagebox.showerror("Error", "Selected DataFrame could not be loaded.")
+            return
+        
+        if df.empty:
+            messagebox.showwarning("Empty DataFrame", "The selected DataFrame is empty.")
+            return
+        
+        # Open file save dialog
+        default_filename = selected_name.replace(" ", "_").replace("(", "").replace(")", "").lower() + ".csv"
+        
+        file_path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title=f"Save {selected_name} as CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=default_filename  # Changed from initialvalue to initialfile
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        try:
+            # Export to CSV
+            df.to_csv(file_path, index=False)
+            
+            # Log success
+            self.log_status(f"✓ Exported {selected_name} to {file_path}")
+            self.log_status(f"Exported {len(df)} rows and {len(df.columns)} columns")
+            
+            # Show success message
+            messagebox.showinfo("Export Successful", 
+                            f"Successfully exported {selected_name} to:\n{file_path}\n\n"
+                            f"Rows: {len(df)}\nColumns: {len(df.columns)}")
+            
+        except Exception as e:
+            error_msg = f"Failed to export {selected_name}:\n{str(e)}"
+            self.log_status(f"✗ {error_msg}")
+            messagebox.showerror("Export Error", error_msg)
+    
+    def run(self):
+        self.root.mainloop()
 
 if __name__ == "__main__":
     app = SessionCreatorApp()

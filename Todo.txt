@@ -1,19 +1,5 @@
 Todo
 
-Change the titles on the spreadsheet column before saving.
-Let them select the spreadsheet names so that it doesn't always overwrite.
-Clarify the save and load. It is the pickle files not the spreadsheets. Sessioning Data vs. Look at spreadsheets?
-Add committee assignment section.
-
-Then hybrid committees...
-
-I started creating an application interface in session_creation_app.py, but I would like to create a new interface in a appv2.py. 
-
-I would like a top section that is an Input & Analysis section. There are three different input files: "Normal Presentations," "Hybrid Invited Presentations," and "Committee Descriptions." The first item is a button that opens a dialog box for loading input files. In this new window, the user selects the type of input using a radio button. Below that is a path and button for selecting a file. Once a file is selected, the user needs to select three different data columns to use for certain variables. Below the column selection section is a small preview section that displays the first few row to make sure the correct columns are selected. While each input source is different, they all have similar process, except the committee descriptions files will only have two columns to select. Back in the main application, once a file has been selected, it should be read as a dataframe and the input status for the spreadsheet will be set to "ready."  So, there is a input file status section below the input to show which files are loaded. Next is a Analysis Model Section. The user needs a radio button to set the input type they are going to analyze. Then there is a Selection Dropdownbox with embedding model options as in session_creation_app.py. There is an analyze button next to the model selection. This button will start the embedding process, but it will be called Analyze or something similar as embedding can be confusing to non-experts.
-
-Below the embedding/analysis section is a section to save and load analyzed data. I'm not sure on the interface structure. I would like the users to be able to load or save each of the three types of analyzed data individually. Maybe two buttons with a radio selection button? I would love to hear suggestions on this element.
-
-Below the input section is an input data status section. For each input file there are two steps, the first one is loading the spreadsheet file. This would be a spreadsheet loaded (yes/no checkbox or similar) indication. Each input also has an Analyzed Data status. Once the spreadsheet is loaded, the spreadsheet status is set to ready. Once the input file is embedded, the analyzed status is set to ready. Each input will have the two different status indicators for the spreadsheet and analyzed data. 
-
-
-Below this is an Output Panel. There are 3 different outputs: Sessions Created, Titles & Keyword Added, Top Committees Assigned. There needs to be a status indicator showing if these steps have been completed.
+Committee Assignment button
+State Load and save
+Analyzed Load and Save

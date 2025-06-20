@@ -916,7 +916,7 @@ def calculate_document_similarities(similarity_matrix, labels):
     return document_similarities
 
 # Default prompts as module-level constants
-DEFAULT_SESSION_PROMPT = """I am organizing oral research presentation sessions for the American Society of Biological and Agricultural Engineers Annual International Meeting. Please provide 3 options for the name/title of a session. Also provide 5 keywords describing the session. The name and keywords should highlight the commonality among all presentations. The target audience for titles and keywords is engineering designers and researchers. The title should be descriptive of the content and be interesting and engaging.
+DEFAULT_SESSION_PROMPT = """I am organizing oral research presentation sessions for the American Society of Biological and Agricultural Engineers Annual International Meeting. Please provide 3 options for the name/title of a session. Also provide 5 keywords describing the session. The name and keywords should highlight the commonality among all presentations. The target audience for titles and keywords is engineering designers and researchers. The title should be descriptive of the content and be interesting and engaging. It should be less than 100 characters long.
 
 Please respond in JSON format:
 {{"title1": "Session Title", "title2": "Session Title", "title3": "Session Title", "keywords": "keyword1, keyword2, keyword3, keyword4, keyword5"}}
@@ -924,7 +924,7 @@ Please respond in JSON format:
 The titles and abstracts for presentations assigned to this session are:
 {presentations}"""
 
-DEFAULT_GEMINI_SESSION_PROMPT = """I am organizing oral research presentation sessions for the American Society of Biological and Agricultural Engineers Annual International Meeting. Please provide 3 options for the name/title of a session. Also provide 5 keywords describing the session. The name and keywords should highlight the commonality among all presentations. The target audience for titles and keywords is engineering designers and researchers. The title should be descriptive of the content and be interesting and engaging.
+DEFAULT_GEMINI_SESSION_PROMPT = """I am organizing oral research presentation sessions for the American Society of Biological and Agricultural Engineers Annual International Meeting. Please provide 3 options for the name/title of a session. Also provide 5 keywords describing the session. The name and keywords should highlight the commonality among all presentations. The target audience for titles and keywords is engineering designers and researchers. The title should be descriptive of the content and be interesting and engaging. It should be less than 100 characters long.
 
 Please respond in this format:
 
@@ -1135,6 +1135,7 @@ def generate_session_titles_and_keywords_gemini(
     df_presentations,
     topic_column="Title and Abstract",
     prompt_template=None,
+    api_key=None,
 ):
     """
     Generate session titles and keywords using Google's Gemini API.
@@ -1144,6 +1145,7 @@ def generate_session_titles_and_keywords_gemini(
         df_presentations (pd.DataFrame): DataFrame with presentation data
         topic_column (str): Column name containing the combined title and abstract text
         prompt_template (str): Custom prompt template with {presentations} placeholder
+        api_key (str): Gemini API key. If not provided, it will be loaded from environment variables.
 
     Returns:
         pd.DataFrame: df_sessions with added columns for generated titles and keywords
@@ -1155,11 +1157,18 @@ def generate_session_titles_and_keywords_gemini(
     if prompt_template is None:
         prompt_template = DEFAULT_GEMINI_SESSION_PROMPT
 
-    # Check for API key
-    if "GEMINI_API_KEY" not in os.environ:
-        raise ValueError(
-            "GEMINI_API_KEY not found in environment variables. Please set it in your .env file."
-        )
+    # Check for API key in environment variables if not provided
+    if api_key is None:
+        if "GEMINI_API_KEY" not in os.environ:
+            raise ValueError(
+                "API key must be provided or in environmental variables. GEMINI_API_KEY not found in environment variables. Please set it in your .env file."
+            )
+        else:
+            api_key = os.environ["GEMINI_API_KEY"]
+
+    # Validate API key
+    if not api_key:
+        raise ValueError("API key is required to use Gemini API.")
 
     # Create sessions dictionary from df_sessions
     sessions_dict = {}
@@ -1186,7 +1195,7 @@ def generate_session_titles_and_keywords_gemini(
     total_sessions = len(sessions_dict)
 
     # Create the client
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(api_key=api_key)
 
     # Generate titles and keywords for each session
     for idx, (session_key, session_value) in enumerate(sessions_dict.items(), 1):
@@ -1463,6 +1472,7 @@ def generate_session_titles_and_keywords(
     topic_column="Title and Abstract",
     model_name="gemini-2.0-flash",
     prompt_template=None,
+    api_key=None,
 ):
     """
     Generate session titles and keywords using various AI models.
@@ -1473,10 +1483,13 @@ def generate_session_titles_and_keywords(
         topic_column: Column name containing presentation text
         model_name: Model to use ('gemini-2.0-flash', 'llama-3.2-local', 'ollama:model_name')
         prompt_template: Custom prompt template with {presentations} placeholder
+        api_key: API key for Gemini if using that model
+    Returns:
+        pd.DataFrame: df_sessions with added columns for generated titles and keywords
     """
     if model_name == "gemini-2.0-flash":
         return generate_session_titles_and_keywords_gemini(
-            df_sessions, df_presentations, topic_column, prompt_template
+            df_sessions, df_presentations, topic_column, prompt_template, api_key
         )
     elif model_name == "llama-3.2-local":
         return generate_session_titles_and_keywords_llama_local(
