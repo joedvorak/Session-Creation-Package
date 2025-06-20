@@ -10,6 +10,7 @@ import threading
 import time
 import os
 import requests
+import json
 
 class PrintCapture:
     """Context manager to capture print statements and redirect them to a callback"""
@@ -620,10 +621,12 @@ class SessionCreatorApp:
         save_load_frame = ttk.Frame(parent)
         save_load_frame.pack(fill=tk.X)
         
-        save_btn = ttk.Button(save_load_frame, text="Save Analysis")
+        save_btn = ttk.Button(save_load_frame, text="Save Analysis", 
+                             command=lambda: self.save_analysis_data(input_type))
         save_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
         
-        load_btn = ttk.Button(save_load_frame, text="Load Analysis")
+        load_btn = ttk.Button(save_load_frame, text="Load Analysis", 
+                             command=lambda: self.load_analysis_data(input_type))
         load_btn.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(2, 0))
     
     def open_data_dialog(self, data_type):
@@ -983,7 +986,322 @@ class SessionCreatorApp:
             self.load_model_btn.config(state='normal', text="Load Model")
             messagebox.showerror("Model Loading Error", 
                                f"Failed to load embedding model:\n{str(e)}")
+    def save_analysis_data(self, data_type):
+        """Save analysis data for a specific data type"""
+        try:
+            # Check if data exists
+            if data_type == "normal":
+                if not hasattr(self, 'normal_presentations_data') or not self.normal_presentations_data:
+                    messagebox.showwarning("No Data", "No normal presentations data to save.")
+                    return
+                if not hasattr(self, 'normal_embeddings') or self.normal_embeddings is None:
+                    messagebox.showwarning("No Analysis", "Normal presentations have not been analyzed yet.")
+                    return
+            elif data_type == "hybrid":
+                if not hasattr(self, 'hybrid_presentations_data') or not self.hybrid_presentations_data:
+                    messagebox.showwarning("No Data", "No hybrid presentations data to save.")
+                    return
+                if not hasattr(self, 'hybrid_embeddings') or self.hybrid_embeddings is None:
+                    messagebox.showwarning("No Analysis", "Hybrid presentations have not been analyzed yet.")
+                    return
+            elif data_type == "committees":
+                if not hasattr(self, 'committee_data') or not self.committee_data:
+                    messagebox.showwarning("No Data", "No committee data to save.")
+                    return
+                if not hasattr(self, 'committee_embeddings') or self.committee_embeddings is None:
+                    messagebox.showwarning("No Analysis", "Committees have not been analyzed yet.")
+                    return
+            
+            # Open directory selection dialog
+            directory = filedialog.askdirectory(
+                parent=self.root,
+                title=f"Select directory to save {data_type} analysis data"
+            )
+            
+            if not directory:
+                return  # User cancelled
+            
+            # Create subdirectory for this data type
+            save_dir = os.path.join(directory, f"{data_type}_analysis")
+            os.makedirs(save_dir, exist_ok=True)
+            
+            self.log_status(f"Saving {data_type} analysis data to {save_dir}")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Save based on data type
+            if data_type == "normal":
+                # Save processed dataframe
+                processed_df = self.normal_presentations_data['processed_dataframe']
+                processed_path = os.path.join(save_dir, "processed_dataframe.parquet")
+                processed_df.to_parquet(processed_path, index=False)
+                
+                # Save raw dataframe
+                raw_df = self.normal_presentations_data['dataframe']
+                raw_path = os.path.join(save_dir, "raw_dataframe.parquet")
+                raw_df.to_parquet(raw_path, index=False)
+                
+                # Save embeddings
+                embeddings_path = os.path.join(save_dir, "embeddings.parquet")
+                self.normal_embeddings.to_parquet(embeddings_path, index=False)
+                
+                # Save metadata
+                metadata = {
+                    'data_type': data_type,
+                    'topic_column': self.normal_presentations_data['topic_column'],
+                    'title_column': self.normal_presentations_data['title_column'],
+                    'abstract_column': self.normal_presentations_data['abstract_column'],
+                    'abstract_id_column': self.normal_presentations_data['abstract_id_column'],
+                    'selected_columns': self.normal_presentations_data['selected_columns'],
+                    'file_path': self.normal_presentations_data['file_path'],
+                    'embedding_model': self.embedding_model_var.get(),
+                    'save_timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+            elif data_type == "hybrid":
+                # Save processed dataframe
+                processed_df = self.hybrid_presentations_data['processed_dataframe']
+                processed_path = os.path.join(save_dir, "processed_dataframe.parquet")
+                processed_df.to_parquet(processed_path, index=False)
+                
+                # Save raw dataframe
+                raw_df = self.hybrid_presentations_data['dataframe']
+                raw_path = os.path.join(save_dir, "raw_dataframe.parquet")
+                raw_df.to_parquet(raw_path, index=False)
+                
+                # Save sessions dataframe
+                sessions_df = self.hybrid_presentations_data['sessions_dataframe']
+                sessions_path = os.path.join(save_dir, "sessions_dataframe.parquet")
+                sessions_df.to_parquet(sessions_path, index=False)
+                
+                # Save embeddings
+                embeddings_path = os.path.join(save_dir, "embeddings.parquet")
+                self.hybrid_embeddings.to_parquet(embeddings_path, index=False)
+                
+                # Save metadata
+                metadata = {
+                    'data_type': data_type,
+                    'topic_column': self.hybrid_presentations_data['topic_column'],
+                    'title_column': self.hybrid_presentations_data['title_column'],
+                    'abstract_column': self.hybrid_presentations_data['abstract_column'],
+                    'abstract_id_column': self.hybrid_presentations_data['abstract_id_column'],
+                    'hybrid_session_column': self.hybrid_presentations_data['hybrid_session_column'],
+                    'selected_columns': self.hybrid_presentations_data['selected_columns'],
+                    'file_path': self.hybrid_presentations_data['file_path'],
+                    'embedding_model': self.embedding_model_var.get(),
+                    'save_timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+            elif data_type == "committees":
+                # Save processed dataframe
+                processed_df = self.committee_data['processed_dataframe']
+                processed_path = os.path.join(save_dir, "processed_dataframe.parquet")
+                processed_df.to_parquet(processed_path, index=False)
+                
+                # Save raw dataframe
+                raw_df = self.committee_data['dataframe']
+                raw_path = os.path.join(save_dir, "raw_dataframe.parquet")
+                raw_df.to_parquet(raw_path, index=False)
+                
+                # Save embeddings
+                embeddings_path = os.path.join(save_dir, "embeddings.parquet")
+                self.committee_embeddings.to_parquet(embeddings_path, index=False)
+                
+                # Save metadata
+                metadata = {
+                    'data_type': data_type,
+                    'topic_column': self.committee_data['topic_column'],
+                    'committee_name_column': self.committee_data['committee_name_column'],
+                    'description_column': self.committee_data['description_column'],
+                    'selected_columns': self.committee_data['selected_columns'],
+                    'file_path': self.committee_data['file_path'],
+                    'embedding_model': self.embedding_model_var.get(),
+                    'save_timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+            
+            # Save metadata as JSON
+            import json
+            metadata_path = os.path.join(save_dir, "metadata.json")
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            self.log_status(f"✓ {data_type.title()} analysis data saved successfully")
+            messagebox.showinfo("Save Successful", 
+                            f"{data_type.title()} analysis data saved to:\n{save_dir}")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error saving {data_type} analysis data: {str(e)}")
+            messagebox.showerror("Save Error", f"Failed to save {data_type} analysis data:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
 
+    def load_analysis_data(self, data_type):
+        """Load analysis data for a specific data type"""
+        try:
+            # Open directory selection dialog
+            directory = filedialog.askdirectory(
+                parent=self.root,
+                title=f"Select directory containing {data_type} analysis data"
+            )
+            
+            if not directory:
+                return  # User cancelled
+            
+            # Check if this looks like an analysis directory
+            expected_files = ["processed_dataframe.parquet", "raw_dataframe.parquet", 
+                            "embeddings.parquet", "metadata.json"]
+            
+            missing_files = []
+            for file in expected_files:
+                file_path = os.path.join(directory, file)
+                if not os.path.exists(file_path):
+                    missing_files.append(file)
+            
+            if missing_files:
+                messagebox.showerror("Invalid Directory", 
+                                f"Selected directory is missing required files:\n" + 
+                                "\n".join(missing_files))
+                return
+            
+            self.log_status(f"Loading {data_type} analysis data from {directory}")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Load metadata first
+            import json
+            metadata_path = os.path.join(directory, "metadata.json")
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            # Verify data type matches
+            if metadata.get('data_type') != data_type:
+                messagebox.showerror("Data Type Mismatch", 
+                                f"Selected directory contains {metadata.get('data_type', 'unknown')} data, " +
+                                f"but {data_type} data was expected.")
+                return
+            
+            # Load dataframes
+            processed_path = os.path.join(directory, "processed_dataframe.parquet")
+            processed_df = pd.read_parquet(processed_path)
+            
+            raw_path = os.path.join(directory, "raw_dataframe.parquet")
+            raw_df = pd.read_parquet(raw_path)
+            
+            embeddings_path = os.path.join(directory, "embeddings.parquet")
+            embeddings_df = pd.read_parquet(embeddings_path)
+            
+            # Load type-specific data and update application state
+            if data_type == "normal":
+                # Reconstruct normal_presentations_data
+                self.normal_presentations_data = {
+                    'processed_dataframe': processed_df,
+                    'dataframe': raw_df,
+                    'topic_column': metadata['topic_column'],
+                    'title_column': metadata['title_column'],
+                    'abstract_column': metadata['abstract_column'],
+                    'abstract_id_column': metadata['abstract_id_column'],
+                    'selected_columns': metadata['selected_columns'],
+                    'file_path': metadata['file_path']
+                }
+                self.normal_embeddings = embeddings_df
+                
+                # Update UI state
+                self.normal_presentations_loaded.set(True)
+                self.normal_analyzed.set(True)
+                self.normal_status_indicator.config(text="Loaded", foreground="green")
+                self.normal_analysis_status.config(text="Analysis: Complete", foreground="green")
+                
+                # Enable buttons
+                if self.embedding_model:
+                    self.normal_analyze_btn.config(state='normal', text="Re-analyze")
+                
+            elif data_type == "hybrid":
+                # Load sessions dataframe
+                sessions_path = os.path.join(directory, "sessions_dataframe.parquet")
+                sessions_df = pd.read_parquet(sessions_path)
+                
+                # Reconstruct hybrid_presentations_data
+                self.hybrid_presentations_data = {
+                    'processed_dataframe': processed_df,
+                    'dataframe': raw_df,
+                    'sessions_dataframe': sessions_df,
+                    'topic_column': metadata['topic_column'],
+                    'title_column': metadata['title_column'],
+                    'abstract_column': metadata['abstract_column'],
+                    'abstract_id_column': metadata['abstract_id_column'],
+                    'hybrid_session_column': metadata['hybrid_session_column'],
+                    'selected_columns': metadata['selected_columns'],
+                    'file_path': metadata['file_path']
+                }
+                self.hybrid_embeddings = embeddings_df
+                
+                # Update UI state
+                self.hybrid_presentations_loaded.set(True)
+                self.hybrid_analyzed.set(True)
+                self.hybrid_status_indicator.config(text="Loaded", foreground="green")
+                self.hybrid_analysis_status.config(text="Analysis: Complete", foreground="green")
+                
+                # Enable buttons
+                if self.embedding_model:
+                    self.hybrid_analyze_btn.config(state='normal', text="Re-analyze")
+                
+            elif data_type == "committees":
+                # Reconstruct committee_data
+                self.committee_data = {
+                    'processed_dataframe': processed_df,
+                    'dataframe': raw_df,
+                    'topic_column': metadata['topic_column'],
+                    'committee_name_column': metadata['committee_name_column'],
+                    'description_column': metadata['description_column'],
+                    'selected_columns': metadata['selected_columns'],
+                    'file_path': metadata['file_path']
+                }
+                self.committee_embeddings = embeddings_df
+                
+                # Update UI state
+                self.committees_loaded.set(True)
+                self.committees_analyzed.set(True)
+                self.committee_status_indicator.config(text="Loaded", foreground="green")
+                self.committee_analysis_status.config(text="Analysis: Complete", foreground="green")
+                
+                # Enable buttons
+                if self.embedding_model:
+                    self.committee_analyze_btn.config(state='normal', text="Re-analyze")
+            
+            # Update embedding model if different
+            saved_model = metadata.get('embedding_model')
+            if saved_model and saved_model != self.embedding_model_var.get():
+                self.log_status(f"Note: Data was created with model '{saved_model}', " +
+                            f"current model is '{self.embedding_model_var.get()}'")
+            
+            # Check session creation readiness
+            if hasattr(self, 'create_sessions_btn'):
+                ready, message = self.check_session_creation_readiness()
+                if ready:
+                    self.create_sessions_btn.config(state='normal')
+                    if hasattr(self, 'session_status_label'):
+                        self.session_status_label.config(text=message, foreground="blue")
+            
+            # Refresh data viewer
+            if hasattr(self, 'refresh_dataframe_list'):
+                self.refresh_dataframe_list()
+            
+            save_date = metadata.get('save_timestamp', 'Unknown')
+            self.log_status(f"✓ {data_type.title()} analysis data loaded successfully (saved: {save_date})")
+            messagebox.showinfo("Load Successful", 
+                            f"{data_type.title()} analysis data loaded successfully!\n\n" +
+                            f"Processed data: {len(processed_df)} rows\n" +
+                            f"Raw data: {len(raw_df)} rows\n" +
+                            f"Embeddings: {len(embeddings_df)} rows\n" +
+                            f"Originally saved: {save_date}")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error loading {data_type} analysis data: {str(e)}")
+            messagebox.showerror("Load Error", f"Failed to load {data_type} analysis data:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
     def create_status_section(self, parent):
         """Create progress bar and status text area"""
         # Progress bar
