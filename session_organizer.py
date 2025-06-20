@@ -349,100 +349,6 @@ def remove_duplicates(df_presentations, df_embeddings, similarity_func, threshol
     
     return df_presentations, df_embeddings
 
-def create_sessions(df_presentations, df_presentation_similarities, df_presentation_embeddings, 
-                   max_sessions=100, min_session_size=8, tree_merge_stop=0.95, cluster_column_name="Session"):
-    """
-    Create sessions from the presentations based on their embeddings and similarities.
-
-    Args:
-        df_presentations (pd.DataFrame): DataFrame containing the presentations.
-        df_presentation_similarities (pd.DataFrame): DataFrame containing the similarity matrix of the presentation embeddings.
-        df_presentation_embeddings (pd.DataFrame): DataFrame containing the embeddings of the presentation topics.
-        max_sessions (int): Maximum number of sessions to create.
-        min_session_size (int): Minimum number of presentations in a session.
-        tree_merge_stop (float): The fraction of the tree to stop clustering at.
-        cluster_column_name (str): The name of the column to store cluster labels.
-
-    Returns:
-        tuple: (df_presentations, df_sessions, labels, metadata)
-    Raises:
-        ValueError: If parameters are invalid.
-    """
-    # Input validation
-    if max_sessions <= 0:
-        raise ValueError("max_sessions must be greater than 0.")
-    if not (0 < tree_merge_stop <= 1):
-        raise ValueError("tree_merge_stop must be between 0 and 1.")
-    if min_session_size < 1:
-        raise ValueError("min_session_size must be at least 1.")
-    
-    # Convert to numpy arrays for faster operations
-    similarity_matrix = df_presentation_similarities.values
-    embeddings_array = df_presentation_embeddings.values
-    
-    # Perform hierarchical clustering
-    linkage_matrix = linkage(
-        y=embeddings_array,
-        method='average',
-        metric='cosine',
-    )
-    
-    # Pre-allocate arrays for better performance
-    n_nodes = linkage_matrix.shape[0]
-    n_pres = similarity_matrix.shape[0]
-    
-    final_clusters = []
-    unassigned_count = linkage_matrix[:, 3].copy()
-    unassigned_leaves = [[] for _ in range(n_nodes)]
-    
-    # Pre-calculate the stopping point
-    merge_stop_index = int(n_nodes * tree_merge_stop)
-    
-    # Main clustering loop
-    for i in range(n_nodes):
-        left_child, right_child = linkage_matrix[i, 0:2].astype(int)
-        
-        # Process left child
-        if left_child >= n_pres:
-            left_idx = left_child - n_pres
-            left_size = unassigned_count[left_idx]
-            unassigned_leaves[i].extend(unassigned_leaves[left_idx])
-        else:
-            left_size = 1
-            unassigned_leaves[i].append(left_child)
-        
-        # Process right child
-        if right_child >= n_pres:
-            right_idx = right_child - n_pres
-            right_size = unassigned_count[right_idx]
-            unassigned_leaves[i].extend(unassigned_leaves[right_idx])
-        else:
-            right_size = 1
-            unassigned_leaves[i].append(right_child)
-        
-        unassigned_count[i] = left_size + right_size
-        
-        # Check clustering conditions
-        if (unassigned_count[i] >= min_session_size and 
-            i < merge_stop_index and 
-            len(final_clusters) < max_sessions):
-            
-            # Create final cluster
-            final_clusters.append(unassigned_leaves[i][:])  # Make a copy
-            unassigned_count[i] = 0
-            unassigned_leaves[i] = []
-    
-    # Assign remaining unassigned leaves
-    if n_nodes > 0 and unassigned_leaves[-1]:
-        final_clusters = _assign_remaining_items(unassigned_leaves[-1], final_clusters, similarity_matrix)
-    
-    # Create outputs
-    df_result, df_sessions, labels, metadata = _create_output_structures(
-        final_clusters, df_presentations, cluster_column_name, n_pres
-    )
- 
-    return df_result, df_sessions, labels, metadata
-
 def get_unique_top_indices_variable(data_array, target_counts):
     """
     Efficiently selects variable numbers of top unique indices for each row of an array.
@@ -1153,11 +1059,11 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
                     answer_dict = json.loads(text_answer)
                     
                     # Store results with validation
-                    session_value["Ollama Title 1"] = answer_dict.get("title1", f"No Title Generated")
-                    session_value["Ollama Title 2"] = answer_dict.get("title2", f"No Title Generated")
-                    session_value["Ollama Title 3"] = answer_dict.get("title3", f"No Title Generated")
-                    session_value["Ollama Keywords"] = answer_dict.get("keywords", "No Keywords Generated")
-                    
+                    session_value[f"Ollama: {model_name} Title 1"] = answer_dict.get("title1", f"No Title Generated")
+                    session_value[f"Ollama: {model_name} Title 2"] = answer_dict.get("title2", f"No Title Generated")
+                    session_value[f"Ollama: {model_name} Title 3"] = answer_dict.get("title3", f"No Title Generated")
+                    session_value[f"Ollama: {model_name} Keywords"] = answer_dict.get("keywords", "No Keywords Generated")
+
                     print(f"  ✓ Generated titles for session {session_key}")
                     
                 except json.JSONDecodeError as e:
@@ -1165,22 +1071,22 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
                     print(f"  Raw response: {text_answer[:1000]}...")
                     
                     # Set fallback values
-                    session_value["Ollama Title 1"] = f"No Title Generated"
-                    session_value["Ollama Title 2"] = f"No Title Generated"
-                    session_value["Ollama Title 3"] = f"No Title Generated"
-                    session_value["Ollama Keywords"] = "No Keywords Generated"
-                    
+                    session_value[f"Ollama: {model_name} Title 1"] = f"No Title Generated"
+                    session_value[f"Ollama: {model_name} Title 2"] = f"No Title Generated"
+                    session_value[f"Ollama: {model_name} Title 3"] = f"No Title Generated"
+                    session_value[f"Ollama: {model_name} Keywords"] = "No Keywords Generated"
+
             else:
                 raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
                 
         except Exception as e:
             print(f"  ✗ Error processing session {session_key}: {e}")
             # Set fallback values
-            session_value["Ollama Title 1"] = f"No Title Generated"
-            session_value["Ollama Title 2"] = f"No Title Generated"
-            session_value["Ollama Title 3"] = f"No Title Generated"
-            session_value["Ollama Keywords"] = "No Keywords Generated"
-    
+            session_value[f"Ollama: {model_name} Title 1"] = f"No Title Generated"
+            session_value[f"Ollama: {model_name} Title 2"] = f"No Title Generated"
+            session_value[f"Ollama: {model_name} Title 3"] = f"No Title Generated"
+            session_value[f"Ollama: {model_name} Keywords"] = "No Keywords Generated"
+
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"\nTotal processing time: {elapsed_time:.2f} seconds")
@@ -1198,10 +1104,10 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
     for _, row in df_sessions_with_titles.iterrows():
         session_id = row[COLUMNS['CLUSTER_ID']]
         if session_id in sessions_dict:
-            title_1_list.append(sessions_dict[session_id].get("Ollama Title 1", "No Title Generated"))
-            title_2_list.append(sessions_dict[session_id].get("Ollama Title 2", "No Title Generated"))
-            title_3_list.append(sessions_dict[session_id].get("Ollama Title 3", "No Title Generated"))
-            keywords_list.append(sessions_dict[session_id].get("Ollama Keywords", "No Keywords Generated"))
+            title_1_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Title 1", "No Title Generated"))
+            title_2_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Title 2", "No Title Generated"))
+            title_3_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Title 3", "No Title Generated"))
+            keywords_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Keywords", "No Keywords Generated"))
         else:
             title_1_list.append("No Title Generated")
             title_2_list.append("No Title Generated")
@@ -1209,11 +1115,11 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
             keywords_list.append("No Keywords Generated")
     
     # Add new columns to DataFrame
-    df_sessions_with_titles["Ollama Title 1"] = title_1_list
-    df_sessions_with_titles["Ollama Title 2"] = title_2_list
-    df_sessions_with_titles["Ollama Title 3"] = title_3_list
-    df_sessions_with_titles["Ollama Keywords"] = keywords_list
-    
+    df_sessions_with_titles[f"Ollama: {model_name} Title 1"] = title_1_list
+    df_sessions_with_titles[f"Ollama: {model_name} Title 2"] = title_2_list
+    df_sessions_with_titles[f"Ollama: {model_name} Title 3"] = title_3_list
+    df_sessions_with_titles[f"Ollama: {model_name} Keywords"] = keywords_list
+
     return df_sessions_with_titles
 
 

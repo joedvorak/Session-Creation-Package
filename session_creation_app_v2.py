@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 import pandas as pd
 import os
+import requests
 from sentence_transformers import SentenceTransformer
 import session_organizer
 
@@ -367,9 +368,10 @@ class SessionCreatorApp:
         self.similarity_threshold_var = tk.DoubleVar(value=0.99)
         self.max_sessions_var = tk.IntVar(value=100)
         self.min_session_size_var = tk.IntVar(value=8)
-        self.llm_choice_var = tk.StringVar(value="local")
+        self.llm_choice_var = tk.StringVar(value="online")
         self.api_key_var = tk.StringVar()
         self.num_committees_var = tk.IntVar(value=3)
+        self.llm_model_var = tk.StringVar()
         
         # Model state
         self.embedding_model = None
@@ -383,9 +385,18 @@ class SessionCreatorApp:
         self.hybrid_analyzed = tk.BooleanVar()
         self.committees_analyzed = tk.BooleanVar()
         
+        # Session creation state
+        self.sessions_created = tk.BooleanVar()
+        self.df_sessions = None
+        self.labels = None
+        self.metadata = None
+        
         # Status components (will be set during layout creation)
         self.progress_bar = None
         self.status_text = None
+        
+        # Ollama models cache
+        self.ollama_models = []
         
         self.create_layout_option_1()
         
@@ -627,6 +638,13 @@ class SessionCreatorApp:
             self.normal_analyze_btn.config(state='normal', text="Re-analyze")
             self.normal_analysis_status.config(text="Analysis: Complete", foreground="green")
             
+            # Enable create sessions button if ready
+            if hasattr(self, 'create_sessions_btn'):
+                ready, message = self.check_session_creation_readiness()
+                if ready:
+                    self.create_sessions_btn.config(state='normal')
+                    self.session_status_label.config(text=message, foreground="blue")
+        
             self.log_status(f"✓ Normal presentations analysis complete. Generated {self.normal_embeddings.shape[0]} embeddings.")
             
         except Exception as e:
@@ -977,8 +995,17 @@ class SessionCreatorApp:
                                    textvariable=self.min_session_size_var, width=10)
         min_size_spin.pack(side=tk.RIGHT)
         
-        create_sessions_btn = ttk.Button(session_frame, text="Create Sessions")
-        create_sessions_btn.pack()
+        # Status section for session creation
+        session_status_frame = ttk.Frame(session_frame)
+        session_status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(session_status_frame, text="Status:").pack(side=tk.LEFT)
+        self.session_status_label = ttk.Label(session_status_frame, text="Ready to create sessions", foreground="blue")
+        self.session_status_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        self.create_sessions_btn = ttk.Button(session_frame, text="Create Sessions", 
+                                            command=self.create_sessions)
+        self.create_sessions_btn.pack()
         
     def create_analysis_tab(self, parent):
         """Create the analysis and export tab"""
@@ -986,33 +1013,55 @@ class SessionCreatorApp:
         titles_frame = ttk.LabelFrame(parent, text="Create Titles and Keywords", padding="10")
         titles_frame.pack(fill=tk.X, padx=5, pady=5)
         
+        # LLM Model Type label
+        llm_type_label = ttk.Label(titles_frame, text="LLM Model Type:")
+        llm_type_label.pack(anchor=tk.W, pady=(0, 5))
+        
         # LLM selection
         llm_frame = ttk.Frame(titles_frame)
         llm_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Radiobutton(llm_frame, text="Local (Ollama)", variable=self.llm_choice_var, 
-                       value="local").pack(side=tk.LEFT)
-        ttk.Radiobutton(llm_frame, text="Online", variable=self.llm_choice_var, 
-                       value="online").pack(side=tk.LEFT, padx=(20, 0))
+        online_radio = ttk.Radiobutton(llm_frame, text="Online", variable=self.llm_choice_var, 
+                                      value="online", command=self.on_llm_choice_changed)
+        online_radio.pack(side=tk.LEFT, padx=(20, 0))
+        
+        local_radio = ttk.Radiobutton(llm_frame, text="Local (Ollama)", variable=self.llm_choice_var, 
+                                     value="local", command=self.on_llm_choice_changed)
+        local_radio.pack(side=tk.LEFT)
+        
+        # Explanatory text
+        llm_note_text = "Note: Switching between Online and Local modes will check for available models, which may take a moment."
+        llm_note_label = ttk.Label(titles_frame, text=llm_note_text, foreground="gray", 
+                                  font=("TkDefaultFont", 8), wraplength=600)
+        llm_note_label.pack(anchor=tk.W, pady=(0, 10))
         
         # Model selection
         model_frame = ttk.Frame(titles_frame)
         model_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(model_frame, text="Model:").pack(side=tk.LEFT)
-        model_combo = ttk.Combobox(model_frame, values=["gemini-2.0-flash"], state='readonly')
-        model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
+        self.model_combo = ttk.Combobox(model_frame, textvariable=self.llm_model_var, state='readonly')
+        self.model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
         
         # API Key
         api_frame = ttk.Frame(titles_frame)
         api_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(api_frame, text="API Key:").pack(side=tk.LEFT)
-        api_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, show="*")
-        api_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
+        self.api_key_label = ttk.Label(api_frame, text="API Key:")
+        self.api_key_label.pack(side=tk.LEFT)
+        self.api_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, show="*")
+        self.api_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
         
-        generate_btn = ttk.Button(titles_frame, text="Generate Titles & Keywords")
-        generate_btn.pack()
+        # Status section for title generation
+        title_status_frame = ttk.Frame(titles_frame)
+        title_status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(title_status_frame, text="Status:").pack(side=tk.LEFT)
+        self.title_status_label = ttk.Label(title_status_frame, text="Ready to generate titles", foreground="blue")
+        self.title_status_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Initialize with online mode
+        self.on_llm_choice_changed()
         
         # Assign Committees
         committees_frame = ttk.LabelFrame(parent, text="Assign Committees", padding="10")
@@ -1035,7 +1084,94 @@ class SessionCreatorApp:
         
         export_btn = ttk.Button(export_frame, text="Export Spreadsheets")
         export_btn.pack()
-    
+        self.generate_btn = ttk.Button(titles_frame, text="Generate Titles & Keywords", 
+                                      command=self.generate_titles_and_keywords)
+        self.generate_btn.pack()
+        
+    def generate_titles_and_keywords(self):
+        """Generate session titles and keywords using the selected LLM model"""
+        # Check if sessions have been created
+        if not self.sessions_created.get() or self.df_sessions is None:
+            messagebox.showwarning("No Sessions", "Please create sessions first before generating titles and keywords.")
+            return
+        
+        # Check if we have the required data
+        if not hasattr(self, 'normal_presentations_data') or not self.normal_presentations_data:
+            messagebox.showwarning("No Data", "Normal presentations data is required for title generation.")
+            return
+        
+        # Get selected model and validate
+        selected_model = self.llm_model_var.get()
+        if not selected_model:
+            messagebox.showwarning("No Model Selected", "Please select a model for title generation.")
+            return
+        
+        # Validate API key for online models
+        if self.llm_choice_var.get() == "online":
+            api_key = self.api_key_var.get().strip()
+            if not api_key:
+                messagebox.showwarning("API Key Required", "Please enter an API key for online model usage.")
+                return
+            
+            # Set environment variable for API key
+            import os
+            if selected_model == "gemini-2.0-flash":
+                os.environ["GEMINI_API_KEY"] = api_key
+            # Add other API key mappings as needed
+        
+        try:
+            self.log_status("Starting title and keyword generation...")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Disable button during processing
+            self.generate_btn.config(state='disabled', text="Generating...")
+            self.title_status_label.config(text="Processing...", foreground="orange")
+            
+            # Get the processed dataframe and topic column
+            df_presentations = self.normal_presentations_data['processed_dataframe']
+            topic_column = self.normal_presentations_data['topic_column']
+            
+            self.root.update()
+            
+            model_name = selected_model
+            
+            self.log_status(f"Using model: {model_name}")
+            self.log_status(f"Generating titles for {len(self.df_sessions)} sessions...")
+            
+            # Call the session_organizer function
+            df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
+                df_sessions=self.df_sessions,
+                df_presentations=df_presentations,
+                topic_column=topic_column,
+                model_name=model_name,
+                prompt_template=None  # Use default prompt
+            )
+            
+            # Update stored sessions data
+            self.df_sessions = df_sessions_with_titles
+            
+            # Update status
+            self.title_status_label.config(text="Titles generated successfully", foreground="green")
+            self.generate_btn.config(state='normal', text="Generate Titles & Keywords")
+            
+            # Log success
+            self.log_status(f"✓ Title and keyword generation complete")
+            self.log_status(f"Generated titles for {len(self.df_sessions)} sessions")
+            
+            # Show success message
+            messagebox.showinfo("Success", 
+                              f"Successfully generated titles and keywords for {len(self.df_sessions)} sessions!")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error during title generation: {str(e)}")
+            self.title_status_label.config(text="Error occurred", foreground="red")
+            self.generate_btn.config(state='normal', text="Generate Titles & Keywords")
+            messagebox.showerror("Title Generation Error", f"Failed to generate titles and keywords:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
+
     def update_threshold_display(self, value):
         """Update the threshold display label when scale changes"""
         self.threshold_label.config(text=f"{float(value):.2f}")
@@ -1109,9 +1245,196 @@ class SessionCreatorApp:
         finally:
             self.progress_bar.stop()
             self.progress_bar.config(mode='determinate', value=0)
+    
+    def create_sessions(self):
+        """Create sessions using the session_organizer.create_sessions_w_hybrid function"""
+        # Check if we have the required data
+        if not hasattr(self, 'normal_presentations_data') or not self.normal_presentations_data:
+            messagebox.showwarning("No Data", "Please load normal presentations data first.")
+            return
+        
+        if not hasattr(self, 'normal_embeddings') or self.normal_embeddings is None:
+            messagebox.showwarning("No Analysis", "Please analyze normal presentations first to generate embeddings.")
+            return
+        
+        if not self.embedding_model:
+            messagebox.showwarning("No Model", "Please load an embedding model first.")
+            return
+        
+        try:
+            self.log_status("Starting session creation process...")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Disable button during processing
+            self.create_sessions_btn.config(state='disabled', text="Creating Sessions...")
+            self.session_status_label.config(text="Processing...", foreground="orange")
+            
+            # Get current parameters
+            max_sessions = self.max_sessions_var.get()
+            min_session_size = self.min_session_size_var.get()
+            
+            # Get the processed dataframe and embeddings
+            df_presentations = self.normal_presentations_data['processed_dataframe']
+            df_embeddings = self.normal_embeddings
+            
+            self.root.update()
+            
+            # Log parameters
+            self.log_status(f"Parameters: max_sessions={max_sessions}, min_session_size={min_session_size}")
+            self.log_status(f"Processing {len(df_presentations)} presentations...")
+            
+            # Prepare hybrid data if available
+            df_hybrid_presentations = None
+            hybrid_session_column = None
+            df_hybrid_embeddings = None
+            
+            if (hasattr(self, 'hybrid_presentations_data') and self.hybrid_presentations_data and
+                hasattr(self, 'hybrid_embeddings') and self.hybrid_embeddings is not None):
+                
+                df_hybrid_presentations = self.hybrid_presentations_data['processed_dataframe']
+                hybrid_session_column = self.hybrid_presentations_data['hybrid_session_column']
+                df_hybrid_embeddings = self.hybrid_embeddings
+                
+                self.log_status(f"Including {len(df_hybrid_presentations)} hybrid presentations...")
+            
+            # Create sessions using session_organizer
+            df_result, df_sessions, labels, metadata = session_organizer.create_sessions_w_hybrid(
+                df_presentations=df_presentations,
+                similarity_func=self.embedding_model.similarity,
+                df_presentation_embeddings=df_embeddings,
+                df_hybrid_presentations=df_hybrid_presentations,
+                hybrid_session_column=hybrid_session_column,
+                df_hybrid_embeddings=df_hybrid_embeddings,
+                max_sessions=max_sessions,
+                min_session_size=min_session_size,
+                tree_merge_stop=0.95,  # Could make this configurable later
+                cluster_column_name="Session Code",
+                final_session_title_column="Final Session Title"
+            )
+            
+            # Store results
+            self.normal_presentations_data['processed_dataframe'] = df_result  # Update with session assignments
+            self.df_sessions = df_sessions
+            self.labels = labels
+            self.metadata = metadata
+            
+            # Update session creation state
+            self.sessions_created.set(True)
+            
+            # Log results
+            self.log_status(f"✓ Session creation complete")
+            self.log_status(f"Created {metadata['n_clusters']} sessions")
+            self.log_status(f"Assigned {metadata['n_assigned_items']} presentations")
+            self.log_status(f"Unassigned presentations: {metadata['n_unassigned_items']}")
+            
+            # Update status
+            status_text = f"Created {metadata['n_clusters']} sessions"
+            self.session_status_label.config(text=status_text, foreground="green")
+            
+            # Re-enable button
+            self.create_sessions_btn.config(state='normal', text="Create Sessions")
+            
+            # Show success message with details
+            result_message = (
+                f"Session creation completed successfully!\n\n"
+                f"Sessions created: {metadata['n_clusters']}\n"
+                f"Presentations assigned: {metadata['n_assigned_items']}\n"
+                f"Unassigned presentations: {metadata['n_unassigned_items']}"
+            )
+            
+            messagebox.showinfo("Success", result_message)
+            
+        except Exception as e:
+            self.log_status(f"✗ Error during session creation: {str(e)}")
+            self.session_status_label.config(text="Error occurred", foreground="red")
+            self.create_sessions_btn.config(state='normal', text="Create Sessions")
+            messagebox.showerror("Session Creation Error", f"Failed to create sessions:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
+
+    def check_session_creation_readiness(self):
+        """Check if all requirements for session creation are met"""
+        if not hasattr(self, 'normal_presentations_data') or not self.normal_presentations_data:
+            return False, "Normal presentations data not loaded"
+        
+        if not hasattr(self, 'normal_embeddings') or self.normal_embeddings is None:
+            return False, "Normal presentations not analyzed (embeddings missing)"
+        
+        if not self.embedding_model:
+            return False, "Embedding model not loaded"
+        
+        return True, "Ready to create sessions"
 
     def run(self):
         self.root.mainloop()
+
+    def check_ollama_availability(self):
+        """Check if Ollama server is available and get available models"""
+        try:
+            response = requests.get("http://localhost:11434/api/tags", timeout=5)
+            if response.status_code == 200:
+                models_data = response.json()
+                if 'models' in models_data:
+                    self.ollama_models = [model['name'] for model in models_data['models']]
+                    return True, f"Ollama server available with {len(self.ollama_models)} models"
+                else:
+                    return False, "Ollama server responded but no models found"
+            else:
+                return False, f"Ollama server responded with status {response.status_code}"
+        except requests.exceptions.ConnectionError:
+            return False, "Cannot connect to Ollama server. Make sure to run 'ollama serve' first"
+        except requests.exceptions.Timeout:
+            return False, "Ollama server connection timed out"
+        except Exception as e:
+            return False, f"Error connecting to Ollama: {str(e)}"
+
+    def on_llm_choice_changed(self):
+        """Handle LLM choice radio button changes"""
+        choice = self.llm_choice_var.get()
+        
+        if choice == "local":
+            # Check Ollama availability
+            available, message = self.check_ollama_availability()
+            
+            if available:
+                self.log_status(f"✓ {message}")
+                # Update model dropdown with Ollama models
+                if hasattr(self, 'model_combo'):
+                    # Prepend "ollama:" to each model name for display
+                    ollama_display_models = [f"ollama:{model}" for model in self.ollama_models]
+                    self.model_combo['values'] = ollama_display_models
+                    if ollama_display_models:
+                        # Set the first formatted model name as the default
+                        self.model_combo.set(ollama_display_models[0])
+                    else:
+                        self.model_combo.set("")    
+                # Update API key field state
+                if hasattr(self, 'api_entry'):
+                    self.api_entry.config(state='disabled')
+                    self.api_key_label.config(text="API Key (not needed for local):", foreground="gray")
+                
+            else:
+                # Show error and revert to online
+                self.log_status(f"✗ Ollama check failed: {message}")
+                messagebox.showerror("Ollama Not Available", 
+                                   f"Cannot use local Ollama server:\n\n{message}\n\nReverting to online mode.")
+                self.llm_choice_var.set("online")
+                self.on_llm_choice_changed()  # Recursively call to set online mode
+                return
+        
+        elif choice == "online":
+            # Update model dropdown with online models
+            if hasattr(self, 'model_combo'):
+                online_models = ["gemini-2.0-flash", "gpt-4o-mini", "claude-3-haiku"]
+                self.model_combo['values'] = online_models
+                self.model_combo.set("gemini-2.0-flash")  # Default online model
+            
+            # Enable API key field
+            if hasattr(self, 'api_entry'):
+                self.api_entry.config(state='normal')
+                self.api_key_label.config(text="API Key:", foreground="black")
 
 if __name__ == "__main__":
     app = SessionCreatorApp()
