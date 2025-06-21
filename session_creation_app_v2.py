@@ -1191,6 +1191,44 @@ class SessionCreatorApp:
             embeddings_path = os.path.join(directory, "embeddings.parquet")
             embeddings_df = pd.read_parquet(embeddings_path)
             
+            # Check if embedding model needs to be loaded/updated
+            saved_model = metadata.get('embedding_model')
+            model_needs_loading = False
+            
+            if saved_model:
+                if not self.embedding_model:
+                    # No model currently loaded
+                    model_needs_loading = True
+                    self.log_status(f"No embedding model currently loaded. Will load: {saved_model}")
+                elif saved_model != self.embedding_model_var.get():
+                    # Different model is currently loaded
+                    model_needs_loading = True
+                    self.log_status(f"Different model currently loaded. Switching from '{self.embedding_model_var.get()}' to '{saved_model}'")
+                else:
+                    self.log_status(f"Correct embedding model already loaded: {saved_model}")
+            
+            # Load embedding model if needed
+            if model_needs_loading and saved_model:
+                try:
+                    self.log_status(f"Loading embedding model: {saved_model}")
+                    self.embedding_model_var.set(saved_model)
+                    
+                    # Load the model
+                    with PrintCapture(self.log_status, self.root):
+                        self.embedding_model = SentenceTransformer(saved_model, trust_remote_code=True)
+                    
+                    # Update model status
+                    self.model_loaded.set(True)
+                    self.model_status_label.config(text="Loaded", foreground="green")
+                    self.log_status(f"✓ Embedding model loaded successfully")
+                    
+                except Exception as e:
+                    self.log_status(f"✗ Failed to load embedding model: {str(e)}")
+                    messagebox.showwarning("Model Loading Failed", 
+                                        f"Could not load the embedding model '{saved_model}' that was used for this data.\n\n"
+                                        f"Error: {str(e)}\n\n"
+                                        f"Please load the correct model manually before using functions that require it.")
+            
             # Load type-specific data and update application state
             if data_type == "normal":
                 # Reconstruct normal_presentations_data
@@ -1269,12 +1307,6 @@ class SessionCreatorApp:
                 if self.embedding_model:
                     self.committee_analyze_btn.config(state='normal', text="Re-analyze")
             
-            # Update embedding model if different
-            saved_model = metadata.get('embedding_model')
-            if saved_model and saved_model != self.embedding_model_var.get():
-                self.log_status(f"Note: Data was created with model '{saved_model}', " +
-                            f"current model is '{self.embedding_model_var.get()}'")
-            
             # Check session creation readiness
             if hasattr(self, 'create_sessions_btn'):
                 ready, message = self.check_session_creation_readiness()
@@ -1289,12 +1321,22 @@ class SessionCreatorApp:
             
             save_date = metadata.get('save_timestamp', 'Unknown')
             self.log_status(f"✓ {data_type.title()} analysis data loaded successfully (saved: {save_date})")
+            
+            # Show success message with model info
+            model_info = ""
+            if saved_model:
+                if self.embedding_model:
+                    model_info = f"\nEmbedding model: {saved_model} ✓"
+                else:
+                    model_info = f"\nEmbedding model: {saved_model} (failed to load)"
+            
             messagebox.showinfo("Load Successful", 
                             f"{data_type.title()} analysis data loaded successfully!\n\n" +
                             f"Processed data: {len(processed_df)} rows\n" +
                             f"Raw data: {len(raw_df)} rows\n" +
                             f"Embeddings: {len(embeddings_df)} rows\n" +
-                            f"Originally saved: {save_date}")
+                            f"Originally saved: {save_date}" +
+                            model_info)
             
         except Exception as e:
             self.log_status(f"✗ Error loading {data_type} analysis data: {str(e)}")
@@ -1302,6 +1344,7 @@ class SessionCreatorApp:
         finally:
             self.progress_bar.stop()
             self.progress_bar.config(mode='determinate', value=0)
+            
     def create_status_section(self, parent):
         """Create progress bar and status text area"""
         # Progress bar
@@ -1534,15 +1577,25 @@ class SessionCreatorApp:
             self.log_status(f"Using model: {model_name}")
             self.log_status(f"Generating titles for {len(self.df_sessions)} sessions...")
             
-            # Call the session_organizer function
-            with PrintCapture(self.log_status, self.root):
-                df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
-                    df_sessions=self.df_sessions,
-                    df_presentations=df_presentations,
-                    topic_column=topic_column,
-                    model_name=model_name,
-                    prompt_template=None,  # Use default prompt
-                    api_key=api_key
+            # # Call the session_organizer function to generate titles and keywords
+            # with PrintCapture(self.log_status, self.root):
+            #     df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
+            #         df_sessions=self.df_sessions,
+            #         df_presentations=df_presentations,
+            #         topic_column=topic_column,
+            #         model_name=model_name,
+            #         prompt_template=None,  # Use default prompt
+            #         api_key=api_key
+            #     )
+
+             # Call the session_organizer function to generate titles and keywords
+            df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
+                df_sessions=self.df_sessions,
+                df_presentations=df_presentations,
+                topic_column=topic_column,
+                model_name=model_name,
+                prompt_template=None,  # Use default prompt
+                api_key=api_key
                 )
             
             # Update stored sessions data
