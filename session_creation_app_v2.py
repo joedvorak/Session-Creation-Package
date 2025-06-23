@@ -1511,7 +1511,8 @@ class SessionCreatorApp:
                                      textvariable=self.num_committees_var, width=5)
         committees_spin.pack(side=tk.RIGHT)
         
-        assign_btn = ttk.Button(committees_frame, text="Assign Committees")
+        assign_btn = ttk.Button(committees_frame, text="Assign Committees", 
+                       command=self.assign_committees)
         assign_btn.pack()
         
         # Export Results
@@ -1577,25 +1578,15 @@ class SessionCreatorApp:
             self.log_status(f"Using model: {model_name}")
             self.log_status(f"Generating titles for {len(self.df_sessions)} sessions...")
             
-            # # Call the session_organizer function to generate titles and keywords
-            # with PrintCapture(self.log_status, self.root):
-            #     df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
-            #         df_sessions=self.df_sessions,
-            #         df_presentations=df_presentations,
-            #         topic_column=topic_column,
-            #         model_name=model_name,
-            #         prompt_template=None,  # Use default prompt
-            #         api_key=api_key
-            #     )
-
-             # Call the session_organizer function to generate titles and keywords
-            df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
-                df_sessions=self.df_sessions,
-                df_presentations=df_presentations,
-                topic_column=topic_column,
-                model_name=model_name,
-                prompt_template=None,  # Use default prompt
-                api_key=api_key
+            # Call the session_organizer function to generate titles and keywords
+            with PrintCapture(self.log_status, self.root):
+                df_sessions_with_titles = session_organizer.generate_session_titles_and_keywords(
+                    df_sessions=self.df_sessions,
+                    df_presentations=df_presentations,
+                    topic_column=topic_column,
+                    model_name=model_name,
+                    prompt_template=None,  # Use default prompt
+                    api_key=api_key
                 )
             
             # Update stored sessions data
@@ -1622,6 +1613,88 @@ class SessionCreatorApp:
             self.progress_bar.stop()
             self.progress_bar.config(mode='determinate', value=0)
 
+    def assign_committees(self):
+        """Assign committees to sessions using similarity analysis"""
+        # Check if sessions have been created
+        if not self.sessions_created.get() or self.df_sessions is None:
+            messagebox.showwarning("No Sessions", "Please create sessions first before assigning committees.")
+            return
+        
+        # Check if we have committee data and embeddings
+        if not hasattr(self, 'committee_data') or not self.committee_data:
+            messagebox.showwarning("No Committee Data", "Please load committee data first.")
+            return
+        
+        if not hasattr(self, 'committee_embeddings') or self.committee_embeddings is None:
+            messagebox.showwarning("No Committee Analysis", "Please analyze committee data first to generate embeddings.")
+            return
+        
+        # Check if we have normal presentations data and embeddings
+        if not hasattr(self, 'normal_presentations_data') or not self.normal_presentations_data:
+            messagebox.showwarning("No Presentations Data", "Normal presentations data is required for committee assignment.")
+            return
+        
+        if not hasattr(self, 'normal_embeddings') or self.normal_embeddings is None:
+            messagebox.showwarning("No Presentations Analysis", "Please analyze normal presentations first to generate embeddings.")
+            return
+        
+        try:
+            self.log_status("Starting committee assignment process...")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Get number of committees to assign
+            top_n = self.num_committees_var.get()
+            
+            # Get the required data
+            df_presentations_embeddings = self.normal_embeddings.copy()
+            df_committees = self.committee_data['processed_dataframe']
+            committee_embeddings = self.committee_embeddings.copy()
+            
+            self.root.update()
+            
+            self.log_status(f"Finding top {top_n} committee matches for {len(self.df_sessions)} sessions...")
+            
+            session_committee_matches = session_organizer.find_most_similar_committees_by_presentations(
+                df_sessions=self.df_sessions,
+                df_presentation_embeddings=df_presentations_embeddings,
+                df_committees=df_committees,
+                committee_embeddings=committee_embeddings,
+                top_n=top_n
+            )
+            # Add committee matches to the sessions dataframe
+            self.log_status("Adding committee assignments to sessions...")
+            df_sessions_with_committees = session_organizer.add_committee_matches_to_clusters(
+                self.df_sessions, session_committee_matches
+            )
+            
+            # Update stored sessions data
+            self.df_sessions = df_sessions_with_committees
+            
+            # Store the committee matches for potential export
+            if not hasattr(self, 'session_committee_matches'):
+                self.session_committee_matches = session_committee_matches
+            else:
+                self.session_committee_matches = session_committee_matches
+            
+            # Log success
+            self.log_status(f"✓ Committee assignment complete")
+            self.log_status(f"Assigned committees to {len(self.df_sessions)} sessions")
+            self.log_status(f"Generated {len(session_committee_matches)} committee-session matches")
+            
+            # Show success message
+            messagebox.showinfo("Success", 
+                            f"Successfully assigned committees to {len(self.df_sessions)} sessions!\n\n"
+                            f"Top {top_n} committee matches found for each session.\n"
+                            f"Committee assignments have been added to the sessions data.")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error during committee assignment: {str(e)}")
+            messagebox.showerror("Committee Assignment Error", f"Failed to assign committees:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
+    
     def update_threshold_display(self, value):
         """Update the threshold display label when scale changes"""
         self.threshold_label.config(text=f"{float(value):.2f}")
@@ -1976,7 +2049,10 @@ class SessionCreatorApp:
         # Check for session data
         if hasattr(self, 'df_sessions') and self.df_sessions is not None:
             dataframes.append(("Created Sessions", "sessions"))
-        
+
+        # Check for committee matches data
+        if hasattr(self, 'session_committee_matches') and self.session_committee_matches is not None:
+            dataframes.append(("Session-Committee Matches", "committee_matches"))
         # Update the combobox
         if hasattr(self, 'df_selection_combo'):
             display_names = [name for name, key in dataframes]
@@ -2035,6 +2111,8 @@ class SessionCreatorApp:
                 return self.committee_data['dataframe']
             elif key == "sessions":
                 return self.df_sessions
+            elif key == "committee_matches":
+                return self.session_committee_matches if hasattr(self, 'session_committee_matches') else None
             else:
                 return None
         except (KeyError, AttributeError):

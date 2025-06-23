@@ -1516,24 +1516,31 @@ def find_most_similar_committees_by_presentations(
     # Input validation
     if df_sessions.empty:
         return pd.DataFrame()
+    print("Starting committee matching...")
 
     if hasattr(committee_embeddings, "values"):
+        if 'embedding_model' in committee_embeddings.columns:
+            committee_embeddings = committee_embeddings.drop(columns=['embedding_model'])
         committee_embeddings = committee_embeddings.values
+    print("Committee embeddings shape:", committee_embeddings.shape)
 
+    if 'embedding_model' in df_presentation_embeddings.columns:
+                    df_presentation_embeddings = df_presentation_embeddings.drop(columns=['embedding_model'])
+            
     # Pre-normalize committee embeddings once
     committee_norms = committee_embeddings / np.linalg.norm(
         committee_embeddings, axis=1, keepdims=True
     )
-
+    print("Committee norms shape:", committee_norms.shape)
     results = []
 
     for _, cluster_row in df_sessions.iterrows():
         session_id = cluster_row[COLUMNS['CLUSTER_ID']]
         presentation_indices = cluster_row[COLUMNS['GEN_PRESENTATION_INDICES']]
+        print(f"Processing session {session_id} with {len(presentation_indices)} presentations...")
 
         if len(presentation_indices) == 0:
             continue
-
         try:
             # Vectorized operations
             session_embeddings = df_presentation_embeddings.iloc[
