@@ -11,6 +11,8 @@ import time
 import os
 import requests
 import json
+import pickle  # Add this import
+import tempfile  # Add this import
 
 class PrintCapture:
     """Context manager to capture print statements and redirect them to a callback"""
@@ -474,10 +476,12 @@ class SessionCreatorApp:
         state_buttons_frame = ttk.Frame(state_frame)
         state_buttons_frame.pack(fill=tk.X)
         
-        save_state_btn = ttk.Button(state_buttons_frame, text="Save Process State")
+        save_state_btn = ttk.Button(state_buttons_frame, text="Save Process State", 
+                                   command=self.save_process_state)
         save_state_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
-        load_state_btn = ttk.Button(state_buttons_frame, text="Load Process State")
+        load_state_btn = ttk.Button(state_buttons_frame, text="Load Process State", 
+                                   command=self.load_process_state)
         load_state_btn.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(5, 0))
         
         # Create notebook for tabs
@@ -509,6 +513,557 @@ class SessionCreatorApp:
         bottom_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         self.create_status_section(bottom_frame)
         
+    def save_process_state(self):
+        """Save the current process state to a file"""
+        try:
+            # Open file save dialog
+            file_path = filedialog.asksaveasfilename(
+                parent=self.root,
+                title="Save Process State",
+                defaultextension=".state",
+                filetypes=[("State files", "*.state"), ("All files", "*.*")],
+                initialfile="session_creation_state.state"
+            )
+            
+            if not file_path:
+                return  # User cancelled
+            
+            self.log_status("Saving process state...")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Collect all state data
+            state_data = {
+                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                'version': '2.0',  # State file version for compatibility checking
+                
+                # GUI Variables
+                'gui_variables': {
+                    'embedding_model_var': self.embedding_model_var.get(),
+                    'similarity_threshold_var': self.similarity_threshold_var.get(),
+                    'max_sessions_var': self.max_sessions_var.get(),
+                    'min_session_size_var': self.min_session_size_var.get(),
+                    'llm_choice_var': self.llm_choice_var.get(),
+                    'api_key_var': self.api_key_var.get(),
+                    'num_committees_var': self.num_committees_var.get(),
+                    'llm_model_var': self.llm_model_var.get(),
+                },
+                
+                # Boolean states
+                'boolean_states': {
+                    'normal_presentations_loaded': self.normal_presentations_loaded.get(),
+                    'hybrid_presentations_loaded': self.hybrid_presentations_loaded.get(),
+                    'committees_loaded': self.committees_loaded.get(),
+                    'model_loaded': self.model_loaded.get(),
+                    'normal_analyzed': self.normal_analyzed.get(),
+                    'hybrid_analyzed': self.hybrid_analyzed.get(),
+                    'committees_analyzed': self.committees_analyzed.get(),
+                    'sessions_created': self.sessions_created.get(),
+                },
+                
+                # Data availability flags (what data structures exist)
+                'data_flags': {
+                    'has_normal_presentations_data': hasattr(self, 'normal_presentations_data') and self.normal_presentations_data is not None,
+                    'has_hybrid_presentations_data': hasattr(self, 'hybrid_presentations_data') and self.hybrid_presentations_data is not None,
+                    'has_committee_data': hasattr(self, 'committee_data') and self.committee_data is not None,
+                    'has_normal_embeddings': hasattr(self, 'normal_embeddings') and self.normal_embeddings is not None,
+                    'has_hybrid_embeddings': hasattr(self, 'hybrid_embeddings') and self.hybrid_embeddings is not None,
+                    'has_committee_embeddings': hasattr(self, 'committee_embeddings') and self.committee_embeddings is not None,
+                    'has_df_sessions': hasattr(self, 'df_sessions') and self.df_sessions is not None,
+                    'has_labels': hasattr(self, 'labels') and self.labels is not None,
+                    'has_metadata': hasattr(self, 'metadata') and self.metadata is not None,
+                    'has_session_committee_matches': hasattr(self, 'session_committee_matches') and self.session_committee_matches is not None,
+                }
+            }
+            
+            # Create a temporary directory for saving data files
+            temp_dir = tempfile.mkdtemp(prefix="session_state_")
+            
+            # Save dataframes and complex data structures
+            saved_files = {}
+            
+            # Save normal presentations data
+            if state_data['data_flags']['has_normal_presentations_data']:
+                normal_dir = os.path.join(temp_dir, "normal_presentations")
+                os.makedirs(normal_dir, exist_ok=True)
+                
+                # Save dataframes
+                if 'processed_dataframe' in self.normal_presentations_data:
+                    processed_path = os.path.join(normal_dir, "processed_dataframe.parquet")
+                    self.normal_presentations_data['processed_dataframe'].to_parquet(processed_path, index=False)
+                    saved_files['normal_processed_df'] = processed_path
+                
+                if 'dataframe' in self.normal_presentations_data:
+                    raw_path = os.path.join(normal_dir, "raw_dataframe.parquet")
+                    self.normal_presentations_data['dataframe'].to_parquet(raw_path, index=False)
+                    saved_files['normal_raw_df'] = raw_path
+                
+                # Save metadata
+                normal_metadata = {k: v for k, v in self.normal_presentations_data.items() 
+                                 if k not in ['processed_dataframe', 'dataframe']}
+                metadata_path = os.path.join(normal_dir, "metadata.json")
+                with open(metadata_path, 'w') as f:
+                    json.dump(normal_metadata, f, indent=2)
+                saved_files['normal_metadata'] = metadata_path
+            
+            # Save hybrid presentations data
+            if state_data['data_flags']['has_hybrid_presentations_data']:
+                hybrid_dir = os.path.join(temp_dir, "hybrid_presentations")
+                os.makedirs(hybrid_dir, exist_ok=True)
+                
+                if 'processed_dataframe' in self.hybrid_presentations_data:
+                    processed_path = os.path.join(hybrid_dir, "processed_dataframe.parquet")
+                    self.hybrid_presentations_data['processed_dataframe'].to_parquet(processed_path, index=False)
+                    saved_files['hybrid_processed_df'] = processed_path
+                
+                if 'dataframe' in self.hybrid_presentations_data:
+                    raw_path = os.path.join(hybrid_dir, "raw_dataframe.parquet")
+                    self.hybrid_presentations_data['dataframe'].to_parquet(raw_path, index=False)
+                    saved_files['hybrid_raw_df'] = raw_path
+                
+                if 'sessions_dataframe' in self.hybrid_presentations_data:
+                    sessions_path = os.path.join(hybrid_dir, "sessions_dataframe.parquet")
+                    self.hybrid_presentations_data['sessions_dataframe'].to_parquet(sessions_path, index=False)
+                    saved_files['hybrid_sessions_df'] = sessions_path
+                
+                hybrid_metadata = {k: v for k, v in self.hybrid_presentations_data.items() 
+                                 if k not in ['processed_dataframe', 'dataframe', 'sessions_dataframe']}
+                metadata_path = os.path.join(hybrid_dir, "metadata.json")
+                with open(metadata_path, 'w') as f:
+                    json.dump(hybrid_metadata, f, indent=2)
+                saved_files['hybrid_metadata'] = metadata_path
+            
+            # Save committee data
+            if state_data['data_flags']['has_committee_data']:
+                committee_dir = os.path.join(temp_dir, "committee_data")
+                os.makedirs(committee_dir, exist_ok=True)
+                
+                if 'processed_dataframe' in self.committee_data:
+                    processed_path = os.path.join(committee_dir, "processed_dataframe.parquet")
+                    self.committee_data['processed_dataframe'].to_parquet(processed_path, index=False)
+                    saved_files['committee_processed_df'] = processed_path
+                
+                if 'dataframe' in self.committee_data:
+                    raw_path = os.path.join(committee_dir, "raw_dataframe.parquet")
+                    self.committee_data['dataframe'].to_parquet(raw_path, index=False)
+                    saved_files['committee_raw_df'] = raw_path
+                
+                committee_metadata = {k: v for k, v in self.committee_data.items() 
+                                    if k not in ['processed_dataframe', 'dataframe']}
+                metadata_path = os.path.join(committee_dir, "metadata.json")
+                with open(metadata_path, 'w') as f:
+                    json.dump(committee_metadata, f, indent=2)
+                saved_files['committee_metadata'] = metadata_path
+            
+            # Save embeddings
+            embeddings_dir = os.path.join(temp_dir, "embeddings")
+            os.makedirs(embeddings_dir, exist_ok=True)
+            
+            if state_data['data_flags']['has_normal_embeddings']:
+                normal_emb_path = os.path.join(embeddings_dir, "normal_embeddings.parquet")
+                self.normal_embeddings.to_parquet(normal_emb_path, index=False)
+                saved_files['normal_embeddings'] = normal_emb_path
+            
+            if state_data['data_flags']['has_hybrid_embeddings']:
+                hybrid_emb_path = os.path.join(embeddings_dir, "hybrid_embeddings.parquet")
+                self.hybrid_embeddings.to_parquet(hybrid_emb_path, index=False)
+                saved_files['hybrid_embeddings'] = hybrid_emb_path
+            
+            if state_data['data_flags']['has_committee_embeddings']:
+                committee_emb_path = os.path.join(embeddings_dir, "committee_embeddings.parquet")
+                self.committee_embeddings.to_parquet(committee_emb_path, index=False)
+                saved_files['committee_embeddings'] = committee_emb_path
+            
+            # Save session creation results
+            if state_data['data_flags']['has_df_sessions']:
+                sessions_path = os.path.join(temp_dir, "df_sessions.parquet")
+                self.df_sessions.to_parquet(sessions_path, index=False)
+                saved_files['df_sessions'] = sessions_path
+            
+            if state_data['data_flags']['has_labels']:
+                labels_path = os.path.join(temp_dir, "labels.pkl")
+                with open(labels_path, 'wb') as f:
+                    pickle.dump(self.labels, f)
+                saved_files['labels'] = labels_path
+            
+            if state_data['data_flags']['has_metadata']:
+                session_metadata_path = os.path.join(temp_dir, "session_metadata.json")
+                with open(session_metadata_path, 'w') as f:
+                    json.dump(self.metadata, f, indent=2)
+                saved_files['session_metadata'] = session_metadata_path
+            
+            if state_data['data_flags']['has_session_committee_matches']:
+                matches_path = os.path.join(temp_dir, "session_committee_matches.parquet")
+                if isinstance(self.session_committee_matches, pd.DataFrame):
+                    self.session_committee_matches.to_parquet(matches_path, index=False)
+                    saved_files['session_committee_matches'] = matches_path
+            
+            # Store the temporary directory and file list in the state
+            state_data['temp_dir'] = temp_dir
+            state_data['saved_files'] = saved_files
+            
+            # Save the main state file
+            with open(file_path, 'wb') as f:
+                pickle.dump(state_data, f)
+            
+            self.log_status(f"✓ Process state saved successfully to {file_path}")
+            
+            # Count items saved
+            data_items = sum(1 for flag in state_data['data_flags'].values() if flag)
+            messagebox.showinfo("Save Successful", 
+                              f"Process state saved successfully!\n\n"
+                              f"File: {os.path.basename(file_path)}\n"
+                              f"Data items saved: {data_items}\n"
+                              f"Timestamp: {state_data['timestamp']}")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error saving process state: {str(e)}")
+            messagebox.showerror("Save Error", f"Failed to save process state:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
+
+    def load_process_state(self):
+        """Load a previously saved process state"""
+        try:
+            # Open file dialog
+            file_path = filedialog.askopenfilename(
+                parent=self.root,
+                title="Load Process State",
+                filetypes=[("State files", "*.state"), ("All files", "*.*")]
+            )
+            
+            if not file_path:
+                return  # User cancelled
+            
+            self.log_status("Loading process state...")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Load the main state file
+            with open(file_path, 'rb') as f:
+                state_data = pickle.load(f)
+            
+            # Check version compatibility
+            state_version = state_data.get('version', '1.0')
+            if state_version != '2.0':
+                messagebox.showwarning("Version Mismatch", 
+                                     f"This state file was created with version {state_version}. "
+                                     f"Current version is 2.0. Loading may not work correctly.")
+            
+            # Confirm before loading (this will reset current state)
+            save_timestamp = state_data.get('timestamp', 'Unknown')
+            data_items = sum(1 for flag in state_data['data_flags'].values() if flag)
+            
+            result = messagebox.askyesno("Confirm Load", 
+                                       f"This will replace your current session state.\n\n"
+                                       f"State file created: {save_timestamp}\n"
+                                       f"Data items: {data_items}\n\n"
+                                       f"Do you want to continue?")
+            if not result:
+                return
+            
+            # Clear current state
+            self.clear_current_state()
+            
+            # Restore GUI variables
+            gui_vars = state_data.get('gui_variables', {})
+            for var_name, value in gui_vars.items():
+                if hasattr(self, var_name):
+                    getattr(self, var_name).set(value)
+            
+            # Get saved files info
+            temp_dir = state_data.get('temp_dir', '')
+            saved_files = state_data.get('saved_files', {})
+            
+            # Load normal presentations data
+            if state_data['data_flags']['has_normal_presentations_data']:
+                self.normal_presentations_data = {}
+                
+                if 'normal_processed_df' in saved_files:
+                    df_path = saved_files['normal_processed_df']
+                    # Update path if it's relative to temp_dir
+                    if not os.path.isabs(df_path) and temp_dir:
+                        df_path = os.path.join(temp_dir, df_path)
+                    if os.path.exists(df_path):
+                        self.normal_presentations_data['processed_dataframe'] = pd.read_parquet(df_path)
+                
+                if 'normal_raw_df' in saved_files:
+                    df_path = saved_files['normal_raw_df']
+                    if not os.path.isabs(df_path) and temp_dir:
+                        df_path = os.path.join(temp_dir, df_path)
+                    if os.path.exists(df_path):
+                        self.normal_presentations_data['dataframe'] = pd.read_parquet(df_path)
+                
+                if 'normal_metadata' in saved_files:
+                    metadata_path = saved_files['normal_metadata']
+                    if not os.path.isabs(metadata_path) and temp_dir:
+                        metadata_path = os.path.join(temp_dir, metadata_path)
+                    if os.path.exists(metadata_path):
+                        with open(metadata_path, 'r') as f:
+                            normal_metadata = json.load(f)
+                        self.normal_presentations_data.update(normal_metadata)
+            
+            # Load hybrid presentations data
+            if state_data['data_flags']['has_hybrid_presentations_data']:
+                self.hybrid_presentations_data = {}
+                
+                if 'hybrid_processed_df' in saved_files:
+                    df_path = saved_files['hybrid_processed_df']
+                    if not os.path.isabs(df_path) and temp_dir:
+                        df_path = os.path.join(temp_dir, df_path)
+                    if os.path.exists(df_path):
+                        self.hybrid_presentations_data['processed_dataframe'] = pd.read_parquet(df_path)
+                
+                if 'hybrid_raw_df' in saved_files:
+                    df_path = saved_files['hybrid_raw_df']
+                    if not os.path.isabs(df_path) and temp_dir:
+                        df_path = os.path.join(temp_dir, df_path)
+                    if os.path.exists(df_path):
+                        self.hybrid_presentations_data['dataframe'] = pd.read_parquet(df_path)
+                
+                if 'hybrid_sessions_df' in saved_files:
+                    df_path = saved_files['hybrid_sessions_df']
+                    if not os.path.isabs(df_path) and temp_dir:
+                        df_path = os.path.join(temp_dir, df_path)
+                    if os.path.exists(df_path):
+                        self.hybrid_presentations_data['sessions_dataframe'] = pd.read_parquet(df_path)
+                
+                if 'hybrid_metadata' in saved_files:
+                    metadata_path = saved_files['hybrid_metadata']
+                    if not os.path.isabs(metadata_path) and temp_dir:
+                        metadata_path = os.path.join(temp_dir, metadata_path)
+                    if os.path.exists(metadata_path):
+                        with open(metadata_path, 'r') as f:
+                            hybrid_metadata = json.load(f)
+                        self.hybrid_presentations_data.update(hybrid_metadata)
+            
+            # Load committee data
+            if state_data['data_flags']['has_committee_data']:
+                self.committee_data = {}
+                
+                if 'committee_processed_df' in saved_files:
+                    df_path = saved_files['committee_processed_df']
+                    if not os.path.isabs(df_path) and temp_dir:
+                        df_path = os.path.join(temp_dir, df_path)
+                    if os.path.exists(df_path):
+                        self.committee_data['processed_dataframe'] = pd.read_parquet(df_path)
+                
+                if 'committee_raw_df' in saved_files:
+                    df_path = saved_files['committee_raw_df']
+                    if not os.path.isabs(df_path) and temp_dir:
+                        df_path = os.path.join(temp_dir, df_path)
+                    if os.path.exists(df_path):
+                        self.committee_data['dataframe'] = pd.read_parquet(df_path)
+                
+                if 'committee_metadata' in saved_files:
+                    metadata_path = saved_files['committee_metadata']
+                    if not os.path.isabs(metadata_path) and temp_dir:
+                        metadata_path = os.path.join(temp_dir, metadata_path)
+                    if os.path.exists(metadata_path):
+                        with open(metadata_path, 'r') as f:
+                            committee_metadata = json.load(f)
+                        self.committee_data.update(committee_metadata)
+            
+            # Load embeddings
+            if state_data['data_flags']['has_normal_embeddings'] and 'normal_embeddings' in saved_files:
+                emb_path = saved_files['normal_embeddings']
+                if not os.path.isabs(emb_path) and temp_dir:
+                    emb_path = os.path.join(temp_dir, emb_path)
+                if os.path.exists(emb_path):
+                    self.normal_embeddings = pd.read_parquet(emb_path)
+            
+            if state_data['data_flags']['has_hybrid_embeddings'] and 'hybrid_embeddings' in saved_files:
+                emb_path = saved_files['hybrid_embeddings']
+                if not os.path.isabs(emb_path) and temp_dir:
+                    emb_path = os.path.join(temp_dir, emb_path)
+                if os.path.exists(emb_path):
+                    self.hybrid_embeddings = pd.read_parquet(emb_path)
+            
+            if state_data['data_flags']['has_committee_embeddings'] and 'committee_embeddings' in saved_files:
+                emb_path = saved_files['committee_embeddings']
+                if not os.path.isabs(emb_path) and temp_dir:
+                    emb_path = os.path.join(temp_dir, emb_path)
+                if os.path.exists(emb_path):
+                    self.committee_embeddings = pd.read_parquet(emb_path)
+            
+            # Load session results
+            if state_data['data_flags']['has_df_sessions'] and 'df_sessions' in saved_files:
+                sessions_path = saved_files['df_sessions']
+                if not os.path.isabs(sessions_path) and temp_dir:
+                    sessions_path = os.path.join(temp_dir, sessions_path)
+                if os.path.exists(sessions_path):
+                    self.df_sessions = pd.read_parquet(sessions_path)
+            
+            if state_data['data_flags']['has_labels'] and 'labels' in saved_files:
+                labels_path = saved_files['labels']
+                if not os.path.isabs(labels_path) and temp_dir:
+                    labels_path = os.path.join(temp_dir, labels_path)
+                if os.path.exists(labels_path):
+                    with open(labels_path, 'rb') as f:
+                        self.labels = pickle.load(f)
+            
+            if state_data['data_flags']['has_metadata'] and 'session_metadata' in saved_files:
+                metadata_path = saved_files['session_metadata']
+                if not os.path.isabs(metadata_path) and temp_dir:
+                    metadata_path = os.path.join(temp_dir, metadata_path)
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        self.metadata = json.load(f)
+            
+            if state_data['data_flags']['has_session_committee_matches'] and 'session_committee_matches' in saved_files:
+                matches_path = saved_files['session_committee_matches']
+                if not os.path.isabs(matches_path) and temp_dir:
+                    matches_path = os.path.join(temp_dir, matches_path)
+                if os.path.exists(matches_path):
+                    self.session_committee_matches = pd.read_parquet(matches_path)
+            
+            # Restore boolean states
+            boolean_states = state_data.get('boolean_states', {})
+            for var_name, value in boolean_states.items():
+                if hasattr(self, var_name):
+                    getattr(self, var_name).set(value)
+            
+            # Update UI state based on loaded data
+            self.update_ui_after_state_load()
+            
+            # Handle embedding model loading
+            saved_model = gui_vars.get('embedding_model_var')
+            if saved_model and state_data['boolean_states'].get('model_loaded', False):
+                try:
+                    self.log_status(f"Loading embedding model: {saved_model}")
+                    with PrintCapture(self.log_status, self.root):
+                        self.embedding_model = SentenceTransformer(saved_model, trust_remote_code=True)
+                    self.model_loaded.set(True)
+                    self.log_status(f"✓ Embedding model loaded successfully")
+                except Exception as e:
+                    self.log_status(f"✗ Failed to load embedding model: {str(e)}")
+                    self.model_loaded.set(False)
+                    messagebox.showwarning("Model Loading Failed", 
+                                         f"Could not load the embedding model '{saved_model}'.\n\n"
+                                         f"Error: {str(e)}")
+            
+            # Refresh data viewer
+            if hasattr(self, 'refresh_dataframe_list'):
+                self.refresh_dataframe_list()
+            
+            self.log_status(f"✓ Process state loaded successfully from {os.path.basename(file_path)}")
+            messagebox.showinfo("Load Successful", 
+                              f"Process state loaded successfully!\n\n"
+                              f"File: {os.path.basename(file_path)}\n"
+                              f"Original timestamp: {save_timestamp}\n"
+                              f"Data items restored: {data_items}")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error loading process state: {str(e)}")
+            messagebox.showerror("Load Error", f"Failed to load process state:\n{str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
+
+    def clear_current_state(self):
+        """Clear the current application state before loading a new one"""
+        # Clear data structures
+        self.normal_presentations_data = None
+        self.hybrid_presentations_data = None
+        self.committee_data = None
+        self.normal_embeddings = None
+        self.hybrid_embeddings = None
+        self.committee_embeddings = None
+        self.df_sessions = None
+        self.labels = None
+        self.metadata = None
+        if hasattr(self, 'session_committee_matches'):
+            self.session_committee_matches = None
+        
+        # Clear embedding model
+        self.embedding_model = None
+        
+        # Reset all boolean variables
+        self.normal_presentations_loaded.set(False)
+        self.hybrid_presentations_loaded.set(False)
+        self.committees_loaded.set(False)
+        self.model_loaded.set(False)
+        self.normal_analyzed.set(False)
+        self.hybrid_analyzed.set(False)
+        self.committees_analyzed.set(False)
+        self.sessions_created.set(False)
+
+    def update_ui_after_state_load(self):
+        """Update UI elements after loading state"""
+        # Update status indicators
+        if hasattr(self, 'normal_status_indicator'):
+            if self.normal_presentations_loaded.get():
+                self.normal_status_indicator.config(text="Loaded", foreground="green")
+                if hasattr(self, 'normal_analyze_btn') and self.embedding_model:
+                    self.normal_analyze_btn.config(state='normal')
+            else:
+                self.normal_status_indicator.config(text="Not Loaded", foreground="red")
+        
+        if hasattr(self, 'hybrid_status_indicator'):
+            if self.hybrid_presentations_loaded.get():
+                self.hybrid_status_indicator.config(text="Loaded", foreground="green")
+                if hasattr(self, 'hybrid_analyze_btn') and self.embedding_model:
+                    self.hybrid_analyze_btn.config(state='normal')
+            else:
+                self.hybrid_status_indicator.config(text="Not Loaded", foreground="red")
+        
+        if hasattr(self, 'committee_status_indicator'):
+            if self.committees_loaded.get():
+                self.committee_status_indicator.config(text="Loaded", foreground="green")
+                if hasattr(self, 'committee_analyze_btn') and self.embedding_model:
+                    self.committee_analyze_btn.config(state='normal')
+            else:
+                self.committee_status_indicator.config(text="Not Loaded", foreground="red")
+        
+        # Update model status
+        if hasattr(self, 'model_status_label'):
+            if self.model_loaded.get():
+                self.model_status_label.config(text="Loaded", foreground="green")
+                if hasattr(self, 'load_model_btn'):
+                    self.load_model_btn.config(text="Reload Model")
+            else:
+                self.model_status_label.config(text="Not Loaded", foreground="red")
+                if hasattr(self, 'load_model_btn'):
+                    self.load_model_btn.config(text="Load Model")
+        
+        # Update analysis status indicators
+        if hasattr(self, 'normal_analysis_status'):
+            if self.normal_analyzed.get():
+                self.normal_analysis_status.config(text="Analysis: Complete", foreground="green")
+                if hasattr(self, 'normal_analyze_btn'):
+                    self.normal_analyze_btn.config(text="Re-analyze")
+            else:
+                self.normal_analysis_status.config(text="Analysis: Not Ready", foreground="orange")
+        
+        if hasattr(self, 'hybrid_analysis_status'):
+            if self.hybrid_analyzed.get():
+                self.hybrid_analysis_status.config(text="Analysis: Complete", foreground="green")
+                if hasattr(self, 'hybrid_analyze_btn'):
+                    self.hybrid_analyze_btn.config(text="Re-analyze")
+            else:
+                self.hybrid_analysis_status.config(text="Analysis: Not Ready", foreground="orange")
+        
+        if hasattr(self, 'committee_analysis_status'):
+            if self.committees_analyzed.get():
+                self.committee_analysis_status.config(text="Analysis: Complete", foreground="green")
+                if hasattr(self, 'committee_analyze_btn'):
+                    self.committee_analyze_btn.config(text="Re-analyze")
+            else:
+                self.committee_analysis_status.config(text="Analysis: Not Ready", foreground="orange")
+        
+        # Update session creation button
+        if hasattr(self, 'create_sessions_btn'):
+            ready, message = self.check_session_creation_readiness()
+            if ready:
+                self.create_sessions_btn.config(state='normal')
+                if hasattr(self, 'session_status_label'):
+                    self.session_status_label.config(text=message, foreground="blue")
+        
+        # Update LLM choice dependent elements
+        if hasattr(self, 'on_llm_choice_changed'):
+            self.on_llm_choice_changed()
+
     def create_input_tab(self, parent):
         """Create the data input tab"""
         # Embedding Model Selection (top of tab)
@@ -835,6 +1390,7 @@ class SessionCreatorApp:
             result['abstract_id_column'] = abstract_id_column
             
             self.normal_presentations_data = result
+            print(result)
             
             # Update status
             self.normal_status_indicator.config(text="Loaded", foreground="green")
@@ -1442,6 +1998,243 @@ class SessionCreatorApp:
         self.create_sessions_btn = ttk.Button(session_frame, text="Create Sessions", 
                                             command=self.create_sessions)
         self.create_sessions_btn.pack()
+
+        
+        # Manual Session Editing Section
+        manual_frame = ttk.LabelFrame(parent, text="Manually Edited Sessions", padding="10")
+        manual_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Instructions text
+        instructions_text = """Manual Session Assignment Instructions:
+
+1. In Data Input: Load desired data sources and analyze them.
+2. In Processing: Run Remove Duplicates and Create Sessions.
+3. In Data Viewer: Click Refresh List and select "Normal Presentations (Processed)" dataframe.
+4. Click "Export to CSV" to export the dataframe.
+5. Open the CSV file in a spreadsheet program (Excel, Google Sheets, etc.).
+6. Edit ONLY the "Session Code" column to reflect desired session assignments.
+- DO NOT EDIT other parts of the file.
+- Use integer values (0, 1, 2, etc.) for session codes.
+- Unassigned presentations should have Session Code = -1.
+7. Save the file and click "Load Edited Session Placements" below."""
+        
+        instructions_label = ttk.Label(manual_frame, text=instructions_text, justify=tk.LEFT, 
+                                    font=("TkDefaultFont", 9), wraplength=600)
+        instructions_label.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Status and button frame
+        manual_status_frame = ttk.Frame(manual_frame)
+        manual_status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(manual_status_frame, text="Status:").pack(side=tk.LEFT)
+        self.manual_status_label = ttk.Label(manual_status_frame, text="Ready to load edited sessions", foreground="blue")
+        self.manual_status_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Load button
+        self.load_edited_btn = ttk.Button(manual_frame, text="Load Edited Session Placements", 
+                                        command=self.load_edited_session_placements)
+        self.load_edited_btn.pack()
+
+    def load_edited_session_placements(self):
+        """Load manually edited session placements from CSV file"""
+        # Check prerequisites
+        if not hasattr(self, 'normal_presentations_data') or not self.normal_presentations_data:
+            messagebox.showwarning("No Data", "Please load normal presentations data first.")
+            return
+        
+        # Open file dialog
+        file_path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Select Edited Session Assignments CSV File",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        try:
+            self.log_status("Loading edited session assignments...")
+            self.progress_bar.config(mode='indeterminate')
+            self.progress_bar.start()
+            
+            # Disable button during processing
+            self.load_edited_btn.config(state='disabled', text="Loading...")
+            self.manual_status_label.config(text="Processing...", foreground="orange")
+            
+            # Load the CSV file
+            df_edited = pd.read_csv(file_path)
+            
+            # Validate the dataframe structure
+            required_columns = ['Session Code']  # Minimum required column
+            missing_columns = [col for col in required_columns if col not in df_edited.columns]
+            
+            if missing_columns:
+                raise ValueError(f"Missing required columns: {missing_columns}")
+            
+            # Validate Session Code column
+            session_codes = df_edited['Session Code']
+            if not pd.api.types.is_numeric_dtype(session_codes):
+                raise ValueError("Session Code column must contain numeric values")
+            
+            # Convert Session Code to integer, handling NaN values as -1 (unassigned)
+            df_edited['Session Code'] = df_edited['Session Code'].fillna(-1).astype(int)
+            
+            # Update the stored processed dataframe
+            self.normal_presentations_data['processed_dataframe'] = df_edited
+            
+            # Create df_sessions using the edited assignments
+            self.create_sessions_from_assignments(df_edited)
+            
+            # Update status
+            self.manual_status_label.config(text="Edited sessions loaded successfully", foreground="green")
+            self.load_edited_btn.config(state='normal', text="Load Edited Session Placements")
+            
+            # Update session creation state
+            self.sessions_created.set(True)
+            
+            # Count sessions and assignments
+            assigned_count = len(df_edited[df_edited['Session Code'] != -1])
+            unassigned_count = len(df_edited[df_edited['Session Code'] == -1])
+            unique_sessions = len(df_edited[df_edited['Session Code'] != -1]['Session Code'].unique())
+            
+            # Log success
+            self.log_status(f"✓ Loaded edited session assignments from {os.path.basename(file_path)}")
+            self.log_status(f"Created {unique_sessions} sessions with {assigned_count} assigned presentations")
+            self.log_status(f"Unassigned presentations: {unassigned_count}")
+            
+            # Refresh data viewer
+            if hasattr(self, 'refresh_dataframe_list'):
+                self.refresh_dataframe_list()
+            
+            # Show success message
+            messagebox.showinfo("Success", 
+                            f"Successfully loaded edited session assignments!\n\n"
+                            f"Sessions created: {unique_sessions}\n"
+                            f"Presentations assigned: {assigned_count}\n"
+                            f"Unassigned presentations: {unassigned_count}")
+            
+        except Exception as e:
+            error_msg = f"Failed to load edited session assignments: {str(e)}"
+            self.log_status(f"✗ {error_msg}")
+            self.manual_status_label.config(text="Error occurred", foreground="red")
+            self.load_edited_btn.config(state='normal', text="Load Edited Session Placements")
+            messagebox.showerror("Load Error", error_msg)
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.config(mode='determinate', value=0)
+
+    def create_sessions_from_assignments(self, df_edited):
+        """Create df_sessions from manually assigned session codes"""
+        try:
+            # Get unique session codes (excluding -1 for unassigned)
+            assigned_df = df_edited[df_edited['Session Code'] != -1]
+            
+            if assigned_df.empty:
+                # No sessions assigned
+                self.df_sessions = pd.DataFrame()
+                self.labels = pd.Series(-1, index=df_edited.index, name="Session Code")
+                self.metadata = {
+                    'n_clusters': 0,
+                    'n_assigned_items': 0,
+                    'n_unassigned_items': len(df_edited),
+                    'n_total_items': len(df_edited),
+                    'source': 'manually_edited'
+                }
+                return
+            print("Creating sessions from manually assigned session codes...")
+            # Group by session code to create clusters
+            session_groups = assigned_df.groupby('Session Code')
+            final_clusters_df_indices = []
+            
+            for session_code, group in session_groups:
+                # Get the DataFrame indices for this session
+                cluster_indices = group.index.tolist()
+                final_clusters_df_indices.append(cluster_indices)
+            
+            # Sort clusters by session code for consistency
+            final_clusters_df_indices.sort(key=lambda cluster: df_edited.loc[cluster[0], 'Session Code'])
+            
+            # Prepare hybrid data - preserve existing hybrid sessions in their exact locations
+            hybrid_cluster_presentations = []
+            hybrid_session_titles = []
+            
+            # Check if we have existing df_sessions with hybrid data to preserve
+            if (hasattr(self, 'df_sessions') and self.df_sessions is not None and 
+                not self.df_sessions.empty and 
+                session_organizer.COLUMNS['HYBRID_INVITED_PRESENTATIONS'] in self.df_sessions.columns and
+                session_organizer.COLUMNS['FINAL_SESSION_TITLE'] in self.df_sessions.columns):
+                
+                # We have existing sessions with hybrid data - preserve them by session code
+                existing_sessions = self.df_sessions
+                
+                for cluster_indices in final_clusters_df_indices:
+                    # Get the session code for this cluster
+                    session_code = df_edited.loc[cluster_indices[0], 'Session Code']
+                    
+                    # Look for an existing session with the same session code
+                    matching_session = existing_sessions[existing_sessions[session_organizer.COLUMNS['CLUSTER_ID']] == session_code]
+                    
+                    if not matching_session.empty:
+                        # Found matching session - preserve its hybrid data
+                        existing_row = matching_session.iloc[0]
+                        existing_hybrid = existing_row[session_organizer.COLUMNS['HYBRID_INVITED_PRESENTATIONS']]
+                        existing_title = existing_row[session_organizer.COLUMNS['FINAL_SESSION_TITLE']]
+                        
+                        # Handle both numpy arrays and lists
+                        if isinstance(existing_hybrid, (list, np.ndarray)):
+                            # Convert numpy array to list if needed
+                            if isinstance(existing_hybrid, np.ndarray):
+                                hybrid_presentations = existing_hybrid.tolist()
+                            else:
+                                hybrid_presentations = existing_hybrid
+                        else:
+                            hybrid_presentations = []
+                        
+                        hybrid_cluster_presentations.append(hybrid_presentations)
+                        
+                        # Keep original title if it's not the default, otherwise use default
+                        if existing_title != session_organizer.UNSET_SESSION_TITLE_TEXT:
+                            hybrid_session_titles.append(existing_title)
+                        else:
+                            hybrid_session_titles.append(session_organizer.UNSET_SESSION_TITLE_TEXT)
+                    else:
+                        # No matching session found, use defaults
+                        hybrid_cluster_presentations.append([])
+                        hybrid_session_titles.append(session_organizer.UNSET_SESSION_TITLE_TEXT)
+            else:
+                # No existing hybrid data, use defaults for all clusters
+                hybrid_cluster_presentations = [[] for _ in final_clusters_df_indices]
+                hybrid_session_titles = [session_organizer.UNSET_SESSION_TITLE_TEXT for _ in final_clusters_df_indices]
+            
+            # Create output structures using the existing function
+            df_result, df_sessions, labels, metadata = session_organizer._create_output_structures_with_df_indices(
+                final_clusters_df_indices, 
+                df_edited, 
+                "Session Code",
+                hybrid_cluster_presentations, 
+                hybrid_session_titles, 
+            )
+            
+            # Store the results
+            self.df_sessions = df_sessions
+            self.labels = labels
+            self.metadata = metadata
+            self.metadata['source'] = 'manually_edited'  # Mark as manually edited
+            
+            # Update the processed dataframe with session assignments (it should already be updated)
+            # but ensure consistency
+            self.normal_presentations_data['processed_dataframe'] = df_result
+            
+            self.log_status(f"✓ Created sessions from manual assignments")
+            
+            # Log preservation of hybrid data
+            hybrid_sessions_count = sum(1 for hybrids in hybrid_cluster_presentations if hybrids)
+            if hybrid_sessions_count > 0:
+                self.log_status(f"✓ Preserved {hybrid_sessions_count} sessions with hybrid presentations")
+            
+        except Exception as e:
+            self.log_status(f"✗ Error creating sessions from assignments: {str(e)}")
+            raise e
         
     def create_analysis_tab(self, parent):
         """Create the analysis and export tab"""
@@ -1515,12 +2308,6 @@ class SessionCreatorApp:
                        command=self.assign_committees)
         assign_btn.pack()
         
-        # Export Results
-        export_frame = ttk.LabelFrame(parent, text="Save Results", padding="10")
-        export_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        export_btn = ttk.Button(export_frame, text="Export Spreadsheets")
-        export_btn.pack()
         self.generate_btn = ttk.Button(titles_frame, text="Generate Titles & Keywords", 
                                       command=self.generate_titles_and_keywords)
         self.generate_btn.pack()
@@ -1835,15 +2622,28 @@ class SessionCreatorApp:
                     min_session_size=min_session_size,
                     tree_merge_stop=0.95,  # Could make this configurable later
                     cluster_column_name="Session Code",
-                    final_session_title_column="Final Session Title"
                 )
             
+            # Analyze the resulting sessions
+            # Calculate session coherence and distinctiveness and add to the DataFrame
+            embeddings_only = df_embeddings.drop(columns=[session_organizer.COLUMNS['EMBEDDING_MODEL']])
+            pres_similarities_matrix = self.embedding_model.similarity(embeddings_only.values, embeddings_only.values)
+            # Convert to numpy if needed
+            if hasattr(pres_similarities_matrix, 'cpu'):
+                pres_similarities_matrix = pres_similarities_matrix.cpu().numpy()
+            elif hasattr(pres_similarities_matrix, 'numpy'):
+                pres_similarities_matrix = pres_similarities_matrix.numpy()
+
+            df_sessions['session_coherence'] = session_organizer.calculate_avg_similarity(df_sessions, pres_similarities_matrix)
+            df_sessions['session_distinctiveness'] = session_organizer.calculate_silhouette_scores(df_sessions, pres_similarities_matrix, labels)
+            df_result['presentation_session_fit'] = session_organizer.calculate_document_similarities(pres_similarities_matrix, labels)
+
             # Store results
             self.normal_presentations_data['processed_dataframe'] = df_result  # Update with session assignments
             self.df_sessions = df_sessions
             self.labels = labels
             self.metadata = metadata
-            
+
             # Update session creation state
             self.sessions_created.set(True)
             

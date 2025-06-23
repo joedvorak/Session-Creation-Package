@@ -492,7 +492,7 @@ def get_unique_top_indices_variable(data_array, target_counts):
 def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_embeddings, 
                              df_hybrid_presentations=None, hybrid_session_column=None, df_hybrid_embeddings=None, 
                    max_sessions=100, min_session_size=8, tree_merge_stop=0.95, cluster_column_name="Session Code",
-                   final_session_title_column="Final Session Title"):
+                   final_session_title_column=COLUMNS['FINAL_SESSION_TITLE']):
     """
     Create sessions from the presentations based on their embeddings and similarities. It is optional to consider hybrid sessions.
     If hybrid sessions are provided, they will be filled first before clustering the remaining presentations. This means that hybrid
@@ -698,7 +698,7 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
 
 def _create_output_structures_with_df_indices(final_clusters_df_indices, df_presentations, cluster_column_name, 
                                             hybrid_cluster_presentations=None, hybrid_session_titles=None, 
-                                            final_session_title_column="Final Session Title"):
+                                            final_session_title_column=COLUMNS['FINAL_SESSION_TITLE']):
     """
     Create output structures using DataFrame indices instead of array positions.
     """
@@ -1516,13 +1516,11 @@ def find_most_similar_committees_by_presentations(
     # Input validation
     if df_sessions.empty:
         return pd.DataFrame()
-    print("Starting committee matching...")
 
     if hasattr(committee_embeddings, "values"):
         if 'embedding_model' in committee_embeddings.columns:
             committee_embeddings = committee_embeddings.drop(columns=['embedding_model'])
         committee_embeddings = committee_embeddings.values
-    print("Committee embeddings shape:", committee_embeddings.shape)
 
     if 'embedding_model' in df_presentation_embeddings.columns:
                     df_presentation_embeddings = df_presentation_embeddings.drop(columns=['embedding_model'])
@@ -1531,7 +1529,6 @@ def find_most_similar_committees_by_presentations(
     committee_norms = committee_embeddings / np.linalg.norm(
         committee_embeddings, axis=1, keepdims=True
     )
-    print("Committee norms shape:", committee_norms.shape)
     results = []
 
     for _, cluster_row in df_sessions.iterrows():

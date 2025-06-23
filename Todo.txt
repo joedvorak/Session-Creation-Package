@@ -1,5 +1,0 @@
-Todo
-
-Committee Assignment button
-State Load and save
-Analyzed Load and Save
