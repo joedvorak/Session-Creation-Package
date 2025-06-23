@@ -184,7 +184,7 @@ def embed_documents(df_presentations, topic_column, embedding_model):
     else:
         model_info = model_name
     
-    if embedding_model.model_card_data.base_model == "jxm/cde-small-v1":
+    if getattr(embedding_model.model_card_data, "base_model", None) in ["jxm/cde-small-v1", "jxm/cde-small-v2"]:
         # This is the CDE model, so we need to use the special CDE embedding function
         return cde_embed_documents(df_presentations, topic_column, embedding_model, model_info)
     else:

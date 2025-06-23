@@ -1077,7 +1077,7 @@ class SessionCreatorApp:
         model_combo = ttk.Combobox(model_select_frame, textvariable=self.embedding_model_var, 
                                   values=["sentence-transformers/all-MiniLM-L6-v2",
                                          "sentence-transformers/all-mpnet-base-v2",
-                                         "jxm/cde-small-v1"], state='readonly')
+                                         "jxm/cde-small-v1"], state='normal')
         model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         
         self.load_model_btn = ttk.Button(model_select_frame, text="Load Model", 
