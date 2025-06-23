@@ -11,8 +11,8 @@ import time
 import os
 import requests
 import json
-import pickle  # Add this import
-import tempfile  # Add this import
+import pickle 
+import tempfile 
 
 class PrintCapture:
     """Context manager to capture print statements and redirect them to a callback"""
@@ -1390,7 +1390,6 @@ class SessionCreatorApp:
             result['abstract_id_column'] = abstract_id_column
             
             self.normal_presentations_data = result
-            print(result)
             
             # Update status
             self.normal_status_indicator.config(text="Loaded", foreground="green")
