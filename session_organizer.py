@@ -691,12 +691,12 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
         final_clusters_df_indices.append(cluster_df_indices)
 
     # Create outputs using DataFrame indices and pass hybrid information
-    df_result, df_sessions, labels, metadata = _create_output_structures_with_df_indices(
+    df_sessions, labels, metadata = _create_output_structures_with_df_indices(
         final_clusters_df_indices, df_presentations, cluster_column_name, 
         hybrid_cluster_presentations, hybrid_session_titles, final_session_title_column
     )
 
-    return df_result, df_sessions, labels, metadata
+    return df_sessions, labels, metadata
 
 def _create_output_structures_with_df_indices(final_clusters_df_indices, df_presentations, cluster_column_name, 
                                             hybrid_cluster_presentations=None, hybrid_session_titles=None, 
@@ -710,10 +710,6 @@ def _create_output_structures_with_df_indices(final_clusters_df_indices, df_pres
     # Assign cluster labels
     for cluster_id, df_indices in enumerate(final_clusters_df_indices):
         labels.loc[df_indices] = cluster_id
-    
-    # Create result DataFrame
-    df_result = df_presentations.copy()
-    df_result[cluster_column_name] = labels
     
     # Create sessions summary
     session_data = []
@@ -749,7 +745,7 @@ def _create_output_structures_with_df_indices(final_clusters_df_indices, df_pres
         'n_total_items': len(df_presentations)
     }
     
-    return df_result, df_sessions, labels, metadata
+    return df_sessions, labels, metadata
 
 
 def _assign_remaining_items(remaining_positions, final_clusters, similarity_matrix):
