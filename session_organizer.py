@@ -12,6 +12,8 @@ from pydantic import BaseModel
 import time
 import os
 from dotenv import load_dotenv
+from itertools import chain
+from sklearn.metrics import silhouette_samples
 
 COLUMNS = {
     'EMBEDDING_MODEL': 'embedding_model',
@@ -780,140 +782,247 @@ def _assign_remaining_items(remaining_positions, final_clusters, similarity_matr
     
     return final_clusters
 
-
-def calculate_avg_similarity(df_sessions, similarity_matrix):
+def calculate_placement_metrics(df_presentations, df_sessions, pres_similarities_matrix, session_column_name='Session Code'):
     """
-    Calculate average intra-cluster similarity for each cluster.
+    Calculate comprehensive quality metrics for session assignments.
     
+    This function computes three key metrics to evaluate how well presentations 
+    are organized into sessions:
+    
+    1. Session Coherence: Average pairwise similarity within each session 
+        (measures internal session quality)
+    2. Session Distinctiveness: Silhouette score for each session 
+        (measures how unique/separable each session is from others)
+    3. Presentation-Session Fit: For each presentation, average similarity 
+        to other presentations in the same session (measures individual fit)
+
     Args:
-        df_sessions (pd.DataFrame): DataFrame with cluster assignments
-        similarity_matrix (np.ndarray): Similarity matrix of presentations
-        
-    Returns:
-        list: Average similarity scores for each cluster
-    """
-    avg_similarities = []
-    
-    for _, row in df_sessions.iterrows():
-        cluster_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
-        
-        if len(cluster_indices) < 2:
-            # Single item clusters have no internal similarity
-            avg_similarities.append(np.nan)
-            continue
-        
-        # Get all pairwise similarities within the cluster
-        cluster_similarities = []
-        for i in range(len(cluster_indices)):
-            for j in range(i + 1, len(cluster_indices)):
-                idx_i = cluster_indices[i]
-                idx_j = cluster_indices[j]
-                cluster_similarities.append(similarity_matrix[idx_i, idx_j])
-        
-        # Calculate average similarity
-        avg_similarity = np.mean(cluster_similarities)
-        avg_similarities.append(avg_similarity)
-    
-    return avg_similarities
-
-def calculate_silhouette_scores(df_sessions, similarity_array, labels, ):
-    """
-    Calculate silhouette scores using the same similarity function as the embedding model.
-    
-    Args:
-        df_sessions (pd.DataFrame): DataFrame with cluster assignments
-        similarity_array (np.ndarray): Precomputed similarity matrix
-        labels (list): List of cluster labels for each presentation
-
+        df_presentations (pd.DataFrame): DataFrame containing presentation data with 
+            session assignments in the specified column.
+        df_sessions (pd.DataFrame): DataFrame containing session metadata with 
+            presentation indices stored in session_organizer.COLUMNS['GEN_PRESENTATION_INDICES'].
+        pres_similarities_matrix (np.ndarray): Symmetric similarity matrix where 
+            element [i,j] represents similarity between presentations i and j.
+        session_column_name (str, optional): Column name in df_presentations that 
+            contains session identifiers. Defaults to 'Session Code'.
 
     Returns:
-        list: Silhouette scores for each cluster
+        tuple[pd.DataFrame, pd.DataFrame]: A tuple containing:
+            - df_sessions: Updated with 'session_coherence' and 'session_distinctiveness' columns
+            - df_presentations: Updated with 'presentation_session_fit' column
+            
+    Raises:
+        AssertionError: If presentation indices exceed the valid range for df_presentations.
+        
+    Note:
+        The function modifies the input DataFrames in place and also returns them.
+        Silhouette scores range from -1 to 1, where higher values indicate better separation.
+        Similarity scores depend on the embedding model used but typically range from 0 to 1.
     """
-    from sklearn.metrics import silhouette_samples
     
-    # Convert labels to numpy array and handle unassigned items
-    labels_array = np.array(labels)
-
-    # Convert similarity to distance: distance = 1 - similarity
-    # Ensure diagonal is exactly 0 for numerical stability
-    distance_matrix = 1 - similarity_array
+    # Convert similarity to distance for silhouette calculation
+    distance_matrix = 1 - pres_similarities_matrix
     np.fill_diagonal(distance_matrix, 0)
-    
-    # Only calculate silhouette for assigned items (exclude -1 labels)
-    assigned_mask = labels_array != -1
-    
-    if np.sum(assigned_mask) < 2:
-        return [np.nan] * len(df_sessions)
-    
-    # Filter distance matrix and labels for assigned items
-    distance_matrix = distance_matrix[assigned_mask][:, assigned_mask]
-    assigned_labels = labels_array[assigned_mask]
-    
-    # Check if we have at least 2 different clusters
-    unique_labels = np.unique(assigned_labels)
-    if len(unique_labels) < 2:
-        return [np.nan] * len(df_sessions)
-       
-    # Calculate silhouette scores for each sample
-    sample_scores = silhouette_samples(distance_matrix, assigned_labels, metric='precomputed')
-    
+
+    pres_indices_by_session = df_sessions[COLUMNS['GEN_PRESENTATION_INDICES']]
+    pos_to_ind, ind_to_pos= create_index_mappings(df_presentations)   
+    pres_positions_by_session = pres_indices_by_session.apply(lambda indices_list: [ind_to_pos[i] for i in indices_list])
+    max_position = max(chain.from_iterable(pres_positions_by_session))
+    # Ensure max_position is within valid range
+    assert max_position <= len(df_presentations) - 1, (
+        f"Maximum position {max_position} exceeds maximum valid index {len(df_presentations) - 1} for df_presentations of length {len(df_presentations)}"
+    )
+
+    # Initialize outputs
+    session_session_similarity_dataframe = pd.DataFrame(index=df_sessions[COLUMNS['CLUSTER_ID']], columns=df_sessions[COLUMNS['CLUSTER_ID']])
+    session_average_similarity_series = pd.Series(index=df_sessions[COLUMNS['CLUSTER_ID']], dtype=float, name='session_coherence')
+    presentation_session_fit_series = pd.Series(index=df_presentations.index, dtype=float, name='presentation_session_fit')
+
+
+    # Calculate the silhouette scores for each presentation first
+    # Get the assigned labels for each presentation
+    labels = df_presentations[session_column_name].values
+    sample_scores = silhouette_samples(distance_matrix, labels, metric='precomputed')
+
+    # Create a pandas Series for session distinctiveness with matching index
+    session_distinctiveness_series = pd.Series(index=df_sessions.index, dtype=float, name='session_distinctiveness')
+
     # Calculate average silhouette score for each cluster
-    cluster_silhouette_scores = []
-    
     for _, row in df_sessions.iterrows():
         cluster_id = row[COLUMNS['CLUSTER_ID']]
         
         # Find samples belonging to this cluster in the assigned data
-        cluster_mask = assigned_labels == cluster_id
+        cluster_mask = labels == cluster_id
         
         if np.sum(cluster_mask) > 0:
             cluster_score = np.mean(sample_scores[cluster_mask])
-            cluster_silhouette_scores.append(cluster_score)
-        else:
-            cluster_silhouette_scores.append(np.nan)
-    
-    return cluster_silhouette_scores
+            session_distinctiveness_series.loc[row.name] = cluster_score
 
-def calculate_document_similarities(similarity_matrix, labels):
-    """
+    # Calculate average similarity for each session
+    for session_id_i, positions_i in pres_positions_by_session.items():
+        for session_id_j, positions_j in pres_positions_by_session.items():
+            if not positions_i or not positions_j:
+                session_session_similarity_dataframe.loc[session_id_i, session_id_j] = 0.0
+                continue
+            session_i_to_j_similarities = pres_similarities_matrix[np.ix_(positions_i, positions_j)]
+            if session_id_i == session_id_j:
+                # First calculate the presentation to session similarities
+                # Mask the diagonal (self-similarity) by setting it to np.nan, then compute mean of each row ignoring nan
+                session_i_to_j_similarities_no_diag = session_i_to_j_similarities.copy()
+                np.fill_diagonal(session_i_to_j_similarities_no_diag, np.nan)
+                presentation_session_fits = np.nanmean(session_i_to_j_similarities_no_diag, axis=1)
+                for i, pos in enumerate(positions_i):
+                    presentation_session_fit_series.loc[pos_to_ind[pos]] = presentation_session_fits[i]
+                # Same session: use upper triangle to avoid double-counting pairs
+                n = session_i_to_j_similarities.shape[0]
+                if n > 1:
+                    triu_indices = np.triu_indices(n, k=1)
+                    avg_similarity = np.mean(session_i_to_j_similarities[triu_indices])
+                    # Store the average similarity in the series for this session
+                    session_average_similarity_series.loc[session_id_i] = avg_similarity
+                else:
+                    avg_similarity = 0.0
+            else:
+                # Different sessions: use all similarities
+                avg_similarity = np.mean(session_i_to_j_similarities)
+            session_session_similarity_dataframe.loc[session_id_i, session_id_j] = avg_similarity
+            
+    return presentation_session_fit_series, session_average_similarity_series, session_distinctiveness_series, session_session_similarity_dataframe
+
+
+# def calculate_avg_similarity(df_sessions, similarity_matrix):
+#     """
+#     Calculate average intra-cluster similarity for each cluster.
     
-    Calculate average similarity of each document to others in its cluster
-    This version has been vectorized for better performance with large datasets
-    Args:
-        similarity_matrix (np.ndarray): Similarity matrix of shape (n_samples, n_samples)
-        labels (array-like): Cluster labels for each document
-    
-    Returns:
-        np.ndarray: Average similarity of each document to its cluster
-    """
-        # Ensure labels is a numpy array for proper vectorized operations
-    labels = np.array(labels)
-    
-    # Input validation
-    n_samples = len(labels)
-    if similarity_matrix.shape[0] != n_samples or similarity_matrix.shape[1] != n_samples:
-        raise ValueError(f"Similarity matrix shape {similarity_matrix.shape} doesn't match labels length {n_samples}")
-    document_similarities = np.zeros(n_samples)
-    
-    # Process each unique cluster
-    unique_labels = np.unique(labels)
-    unique_labels = unique_labels[unique_labels != -1]  # Exclude unassigned
-    
-    for cluster_label in unique_labels:
-        cluster_mask = labels == cluster_label
-        cluster_indices = np.where(cluster_mask)[0]
+#     Args:
+#         df_sessions (pd.DataFrame): DataFrame with cluster assignments
+#         similarity_matrix (np.ndarray): Similarity matrix of presentations
         
-        if len(cluster_indices) > 1:  # Only process multi-item clusters
-            # Extract submatrix for this cluster
-            cluster_sim_matrix = similarity_matrix[np.ix_(cluster_indices, cluster_indices)]
-            
-            # Calculate mean similarity for each item (excluding diagonal)
-            cluster_means = (cluster_sim_matrix.sum(axis=1) - np.diag(cluster_sim_matrix)) / (len(cluster_indices) - 1)
-            
-            # Assign back to main array
-            document_similarities[cluster_indices] = cluster_means
+#     Returns:
+#         list: Average similarity scores for each cluster
+#     """
+#     avg_similarities = []
     
-    return document_similarities
+#     for _, row in df_sessions.iterrows():
+#         cluster_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
+        
+#         if len(cluster_indices) < 2:
+#             # Single item clusters have no internal similarity
+#             avg_similarities.append(np.nan)
+#             continue
+        
+#         # Get all pairwise similarities within the cluster
+#         cluster_similarities = []
+#         for i in range(len(cluster_indices)):
+#             for j in range(i + 1, len(cluster_indices)):
+#                 idx_i = cluster_indices[i]
+#                 idx_j = cluster_indices[j]
+#                 cluster_similarities.append(similarity_matrix[idx_i, idx_j])
+        
+#         # Calculate average similarity
+#         avg_similarity = np.mean(cluster_similarities)
+#         avg_similarities.append(avg_similarity)
+    
+#     return avg_similarities
+
+# def calculate_silhouette_scores(df_sessions, similarity_array, labels, ):
+#     """
+#     Calculate silhouette scores using the same similarity function as the embedding model.
+    
+#     Args:
+#         df_sessions (pd.DataFrame): DataFrame with cluster assignments
+#         similarity_array (np.ndarray): Precomputed similarity matrix
+#         labels (list): List of cluster labels for each presentation
+
+
+#     Returns:
+#         list: Silhouette scores for each cluster
+#     """
+#     from sklearn.metrics import silhouette_samples
+    
+#     # Convert labels to numpy array and handle unassigned items
+#     labels_array = np.array(labels)
+
+#     # Convert similarity to distance: distance = 1 - similarity
+#     # Ensure diagonal is exactly 0 for numerical stability
+#     distance_matrix = 1 - similarity_array
+#     np.fill_diagonal(distance_matrix, 0)
+    
+#     # Only calculate silhouette for assigned items (exclude -1 labels)
+#     assigned_mask = labels_array != -1
+    
+#     if np.sum(assigned_mask) < 2:
+#         return [np.nan] * len(df_sessions)
+    
+#     # Filter distance matrix and labels for assigned items
+#     distance_matrix = distance_matrix[assigned_mask][:, assigned_mask]
+#     assigned_labels = labels_array[assigned_mask]
+    
+#     # Check if we have at least 2 different clusters
+#     unique_labels = np.unique(assigned_labels)
+#     if len(unique_labels) < 2:
+#         return [np.nan] * len(df_sessions)
+       
+#     # Calculate silhouette scores for each sample
+#     sample_scores = silhouette_samples(distance_matrix, assigned_labels, metric='precomputed')
+    
+#     # Calculate average silhouette score for each cluster
+#     cluster_silhouette_scores = []
+    
+#     for _, row in df_sessions.iterrows():
+#         cluster_id = row[COLUMNS['CLUSTER_ID']]
+        
+#         # Find samples belonging to this cluster in the assigned data
+#         cluster_mask = assigned_labels == cluster_id
+        
+#         if np.sum(cluster_mask) > 0:
+#             cluster_score = np.mean(sample_scores[cluster_mask])
+#             cluster_silhouette_scores.append(cluster_score)
+#         else:
+#             cluster_silhouette_scores.append(np.nan)
+    
+#     return cluster_silhouette_scores
+
+# def calculate_document_similarities(similarity_matrix, labels):
+#     """
+    
+#     Calculate average similarity of each document to others in its cluster
+#     This version has been vectorized for better performance with large datasets
+#     Args:
+#         similarity_matrix (np.ndarray): Similarity matrix of shape (n_samples, n_samples)
+#         labels (array-like): Cluster labels for each document
+    
+#     Returns:
+#         np.ndarray: Average similarity of each document to its cluster
+#     """
+#         # Ensure labels is a numpy array for proper vectorized operations
+#     labels = np.array(labels)
+    
+#     # Input validation
+#     n_samples = len(labels)
+#     if similarity_matrix.shape[0] != n_samples or similarity_matrix.shape[1] != n_samples:
+#         raise ValueError(f"Similarity matrix shape {similarity_matrix.shape} doesn't match labels length {n_samples}")
+#     document_similarities = np.zeros(n_samples)
+    
+#     # Process each unique cluster
+#     unique_labels = np.unique(labels)
+#     unique_labels = unique_labels[unique_labels != -1]  # Exclude unassigned
+    
+#     for cluster_label in unique_labels:
+#         cluster_mask = labels == cluster_label
+#         cluster_indices = np.where(cluster_mask)[0]
+        
+#         if len(cluster_indices) > 1:  # Only process multi-item clusters
+#             # Extract submatrix for this cluster
+#             cluster_sim_matrix = similarity_matrix[np.ix_(cluster_indices, cluster_indices)]
+            
+#             # Calculate mean similarity for each item (excluding diagonal)
+#             cluster_means = (cluster_sim_matrix.sum(axis=1) - np.diag(cluster_sim_matrix)) / (len(cluster_indices) - 1)
+            
+#             # Assign back to main array
+#             document_similarities[cluster_indices] = cluster_means
+    
+#     return document_similarities
 
 # Default prompts as module-level constants
 DEFAULT_SESSION_PROMPT = """I am organizing oral research presentation sessions for the American Society of Biological and Agricultural Engineers Annual International Meeting. Please provide 3 options for the name/title of a session. Also provide 5 keywords describing the session. The name and keywords should highlight the commonality among all presentations. The target audience for titles and keywords is engineering designers and researchers. The title should be descriptive of the content and be interesting and engaging. It should be less than 100 characters long.
