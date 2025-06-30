@@ -30,3 +30,8 @@ __pycache__/
 # Presentation Data
 df_presentations.pkl
 
+# PyInstaller Files
+dist/
+build/
+*.spec
+__pycache__/
