@@ -2206,7 +2206,7 @@ class SessionCreatorApp:
                 hybrid_session_titles = [session_organizer.UNSET_SESSION_TITLE_TEXT for _ in final_clusters_df_indices]
             
             # Create output structures using the existing function
-            df_result, df_sessions, labels, metadata = session_organizer._create_output_structures_with_df_indices(
+            df_sessions, labels, metadata = session_organizer._create_output_structures_with_df_indices(
                 final_clusters_df_indices, 
                 df_edited, 
                 "Session Code",
@@ -2222,7 +2222,8 @@ class SessionCreatorApp:
             
             # Update the processed dataframe with session assignments (it should already be updated)
             # but ensure consistency
-            self.normal_presentations_data['processed_dataframe'] = df_result
+            df_edited['Session Code'] = labels
+            self.normal_presentations_data['processed_dataframe'] = df_edited
             
             self.log_status(f"✓ Created sessions from manual assignments")
             
@@ -2610,7 +2611,7 @@ class SessionCreatorApp:
             
             # Create sessions using session_organizer
             with PrintCapture(self.log_status, self.root):
-                df_result, df_sessions, labels, metadata = session_organizer.create_sessions_w_hybrid(
+                df_sessions, labels, metadata = session_organizer.create_sessions_w_hybrid(
                     df_presentations=df_presentations,
                     similarity_func=self.embedding_model.similarity,
                     df_presentation_embeddings=df_embeddings,
@@ -2622,6 +2623,7 @@ class SessionCreatorApp:
                     tree_merge_stop=0.95,  # Could make this configurable later
                     cluster_column_name="Session Code",
                 )
+            df_presentations['Session Code'] = labels
             
             # Analyze the resulting sessions
             # Calculate session coherence and distinctiveness and add to the DataFrame
@@ -2633,12 +2635,10 @@ class SessionCreatorApp:
             elif hasattr(pres_similarities_matrix, 'numpy'):
                 pres_similarities_matrix = pres_similarities_matrix.numpy()
 
-            df_sessions['session_coherence'] = session_organizer.calculate_avg_similarity(df_sessions, pres_similarities_matrix)
-            df_sessions['session_distinctiveness'] = session_organizer.calculate_silhouette_scores(df_sessions, pres_similarities_matrix, labels)
-            df_result['presentation_session_fit'] = session_organizer.calculate_document_similarities(pres_similarities_matrix, labels)
+            df_presentations['presentation_session_fit'], df_sessions['session_coherence'], df_sessions['session_distinctiveness'], df_session_session_similarity = session_organizer.calculate_placement_metrics(df_presentations, df_sessions, pres_similarities_matrix, session_column_name='Session Code')
 
             # Store results
-            self.normal_presentations_data['processed_dataframe'] = df_result  # Update with session assignments
+            self.normal_presentations_data['processed_dataframe'] = df_presentations  # Update with session assignments
             self.df_sessions = df_sessions
             self.labels = labels
             self.metadata = metadata

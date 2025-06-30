@@ -818,7 +818,13 @@ def calculate_placement_metrics(df_presentations, df_sessions, pres_similarities
     
     # Convert similarity to distance for silhouette calculation
     distance_matrix = 1 - pres_similarities_matrix
+    # Perfect matches which occurs on the diagonal should have similiarity of 1 or 
+    # distance 0, but they often don't due to numerical instability. 
+    # So we ensure the diagonal is 0 to avoid self-similarity issues.
     np.fill_diagonal(distance_matrix, 0)
+    # Any duplicates not removed should also have a distance of 0.
+    # These will not appear on the diagonal, but we ensure no negative distances.
+    distance_matrix[distance_matrix < 0] = 0
 
     pres_indices_by_session = df_sessions[COLUMNS['GEN_PRESENTATION_INDICES']]
     pos_to_ind, ind_to_pos= create_index_mappings(df_presentations)   
