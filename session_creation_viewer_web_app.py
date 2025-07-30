@@ -4,11 +4,11 @@ import pandas as pd
 import hmac
 import cryptpandas as crp
 
-PRES_SIMILARITIES_MATRIX_PATH = 'pres_similarities_matrix.parquet'
-SESSION_SIMILARITIES_MATRIX_PATH = 'session_similarities_matrix.parquet'
-NO_ABSTRACT_PRES_DATA_PATH = 'df_no_abstract.parquet'
+PRES_SIMILARITIES_MATRIX_PATH = 'pres_similarities_matrixAIM25.parquet'
+SESSION_SIMILARITIES_MATRIX_PATH = 'session_similarities_matrixAIM25.parquet'
+NO_ABSTRACT_PRES_DATA_PATH = 'df_no_abstractAIM25.parquet'
 ENCRYPTED_PRES_DATA_PATH = 'encrypted_df.crypt'
-SESSION_DATA_PATH = 'df_sessions.parquet'
+SESSION_DATA_PATH = 'df_sessionsAIM25.parquet'
 
 st.set_page_config(
     page_title="AIM 2025 Presentation Similarity",
@@ -16,7 +16,16 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("Presentation Similarity Exploration Tool")
+st.title("ASABE AIM 2025 Presentation and Session Similarity Exploration Tool")
+
+st.markdown("""
+This tool allows you to explore the similarity between presentations and sessions at the ASABE AIM 2025 conference. 
+You can view presentations, sessions, and how similar they are to each other based on their content.
+Similarity is based on the title and abstract of each presentation, using [Google's Gemini Embedding Model](https://ai.google.dev/gemini-api/docs/models#gemini-embedding) to calculate cosine similarity scores.
+
+**Note:** The abstracts are encrypted for security. You must enter the correct password to view them. 
+The password is provided by the ASABE AIM 2025 organizers. If you do not have it, please contact them.
+""")
 
 # Password Check to unlock abstracts.
 def password_entered():
@@ -78,7 +87,7 @@ with st.expander("Similarity Metric Descriptions"):
         '*All Similarity Metrics range from 0.0 (no relation) to 1.0 (identical). Scales are relevative and not absolute. They vary by model and cannot be compared across models. (e.g. A 0.6 is a "poor" similiarity with the nomic-embed-text-v1.5 model, but an "average" similiary with the cde-small-v1 model.*'
     )
     st.markdown(
-        "**presentation_session_fit:**  This *presentation metric* is the average cosine similarity between a presentation and all others in its assigned session. It measures how similar a presentation is to others in its session. It does not include a presentation's similarity with itself, which is always 1.0."
+        "**Presentation-Session Similarity** or **presentation_session_fit:**  This *presentation metric* is the average cosine similarity between a presentation and all others in its assigned session. It measures how similar a presentation is to others in its session. It does not include a presentation's similarity with itself, which is always 1.0."
     )
     st.write("It is calculated as:")
     # Using raw strings to perserve LaTex format.
@@ -96,7 +105,7 @@ with st.expander("Similarity Metric Descriptions"):
         r"- $sim(p_i, p_k)$ is the cosine similarity between presentation $p_i$ and presentation $p_k$."
     )
     st.write(
-        "**session_coherence:** This *session metric* is the average cosine similarity between all presentations assigned to the same session. It is an overall indicator of how well a session focuses on one topic."
+        "**Session Similarity** or **session_coherence:** This *session metric* is the average cosine similarity between all presentations assigned to the same session. It is an overall indicator of how well a session focuses on one topic."
     )
     st.write("It is calculated as:")
     # Using raw strings to perserve LaTex format.
@@ -127,21 +136,21 @@ with st.expander("Similarity Metric Descriptions"):
         r"- $\overline{PSS(s_j)}$ is the average presentation_session_fit for all presentations in session $s_j$."
     )
     st.write(
-        "**Raw Deviation:** This *presentation metric* is the difference between a presentation's presentation_session_fit and its session's session_coherence. A direct measure of the difference in similarity of a presentation and its session."
+        "**Presentation Raw Deviation:** This *presentation metric* is the difference between a presentation's presentation_session_fit and its session's session_coherence. A direct measure of the difference in similarity of a presentation and its session."
     )
     st.write("It is calculated as:")
     # Using raw strings to perserve LaTex format.
     st.markdown(r"$RD(p_i) = PSS(p_i) - SS(s_j)$")
     st.write("where:")
-    st.markdown(r"- $RD(p_i)$ is the Raw Deviation for presentation $p_i$.")
+    st.markdown(r"- $RD(p_i)$ is the Presentation Raw Deviation for presentation $p_i$.")
     st.write(
-        "**Standardized Deviation:** This *presentation metric* is the Raw Deviation of the presentation divided by the Session Standard Deviation of the session to which it is assigned. This standardizes the similarity difference based on the variability in a session. This is analogous to a z-score. It is most useful for identifying single presentations that stand out from an otherwise very focused session."
+        "**Presentation Standardized Deviation:** This *presentation metric* is the Presentation Raw Deviation of the presentation divided by the Session Standard Deviation of the session to which it is assigned. This standardizes the similarity difference based on the variability in a session. This is analogous to a z-score. It is most useful for identifying single presentations that stand out from an otherwise very focused session."
     )
     st.write("It is calculated as:")
     # Using raw strings to perserve LaTex format.
     st.markdown(r"$SD(p_i) = \frac{RD(p_i)}{SSD(s_j)}$")
     st.write("where:")
-    st.markdown(r"- $SD(p_i)$ is the Standardized Deviation for presentation $p_i$.")
+    st.markdown(r"- $SD(p_i)$ is the Presentation Standardized Deviation for presentation $p_i$.")
     st.write(
         "**Session-Session Similarity:** This *session to session metric* is the average similarity between all presentations in one session with all those in another session. It indicates how similar the topic of one session is to the topic of another session."
     )
@@ -190,12 +199,12 @@ with tab_pres:
         hide_index=True,
         column_config={
             "Abstract ID": st.column_config.NumberColumn(format="%i"),
-            "presentation_session_fit": st.column_config.NumberColumn(
+            "Presentation Session Fit": st.column_config.NumberColumn(
                 format="%.3f"
             ),
             "Session Std Dev": None,
-            "Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
-            "Standardized Deviation": st.column_config.NumberColumn(format="%.3f"),
+            "Presentation Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
+            "Presentation Standardized Deviation": st.column_config.NumberColumn(format="%.3f"),
         },
         on_select="rerun",
         selection_mode="single-row",
@@ -207,7 +216,7 @@ with tab_pres:
             event.selection.rows
         ]  # Create a dataframe from the selected presentation row.
         st.write(
-            selected_pres.iloc[0]["Title"]
+            selected_pres.iloc[0]["Presentation Title"]
         )  # It is necessary to request the first row, [0], since it is a dataframe and not just one entry.
         st.header("Most Similar Presentations")
         similar_presentations = df_similarity.loc[
@@ -229,21 +238,23 @@ with tab_pres:
                 "Abstract ID": st.column_config.NumberColumn(format="%i"),
                 "presentation_session_fit": None,
                 "Session Std Dev": None,
-                "Raw Deviation": None,
-                "Standardized Deviation": None,
+                "Presentation Raw Deviation": None,
+                "Presentation Standardized Deviation": None,
             },
         )
 with tab_session:
     st.header("Sessions")
-    cluster_session_sizes_df = df_sessions["session_size"]
+    cluster_session_sizes_df = df_sessions["Session Size"]
     cluster_session_sizes_df.index.name = 'Session Name'  # Set the index name for better labeling
+    cluster_session_sizes_df.index = df_sessions['Session Name']  # Ensure the index is set to the session names
     cluster_session_sizes_df = cluster_session_sizes_df.rename("Presentations Count")
     cluster_session_sizes_df.sort_index(inplace=True)  # Sort the index for better visualization
     st.subheader("Session Size Distribution") 
     st.bar_chart(cluster_session_sizes_df, x_label="Session Name", y_label="Presentations Count") 
 
-    cluster_session_sim_df = df_sessions["session_coherence"]
+    cluster_session_sim_df = df_sessions["Session Coherence"]
     cluster_session_sim_df.index.name = 'Session Name'  # Set the index name for better labeling
+    cluster_session_sim_df.index = df_sessions['Session Name']  # Ensure the index is set to the session names
     cluster_session_sim_df = cluster_session_sim_df.rename("Session Coherence Score")
     cluster_session_sim_df.sort_index(inplace=True)  # Sort the index for better visualization
     st.subheader("Session Coherence Distribution") 
@@ -259,7 +270,7 @@ with tab_session:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "session_coherence": st.column_config.NumberColumn(format="%.3f"),
+            "Session Coherence": st.column_config.NumberColumn(format="%.3f"),
             "Session Std Dev": st.column_config.NumberColumn(format="%.3f"),
         },
         on_select="rerun",
@@ -271,13 +282,13 @@ with tab_session:
         selected_session_df = df_sessions.iloc[
             event_session.selection.rows
         ]  # Create a dataframe from the selected session row.
-        selected_session = selected_session_df.iloc[0]["cluster_id"]
+        selected_session = selected_session_df.iloc[0]["Session Name"]
         st.subheader(selected_session)
         st.write(
-            f"**session_coherence:** {selected_session_df.iloc[0]['session_coherence']:.3f}"
+            f"**Session Coherence:** {selected_session_df.iloc[0]['Session Coherence']:.3f}"
         )
         df_selected_session = df_presentations[
-            df_presentations["Session Code"] == selected_session
+            df_presentations["Session"] == selected_session
         ]
         if (
             "Abstract" in df_selected_session
@@ -287,20 +298,20 @@ with tab_session:
                 use_container_width=True,
                 hide_index=True,
                 column_order=[
-                    "presentation_session_fit",
-                    "Standardized Deviation",
+                    "Presentation Session Fit",
+                    "Presentation Standardized Deviation",
                     "Abstract ID",
-                    "Title",
+                    "Presentation Title",
                     "Abstract",
                 ],
                 column_config={
                     "Abstract ID": st.column_config.NumberColumn(format="%i"),
-                    "presentation_session_fit": st.column_config.NumberColumn(
+                    "Presentation Session Fit": st.column_config.NumberColumn(
                         format="%.3f"
                     ),
                     "Session Std Dev": None,
-                    "Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
-                    "Standardized Deviation": st.column_config.NumberColumn(
+                    "Presentation Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
+                    "Presentation Standardized Deviation": st.column_config.NumberColumn(
                         format="%.3f"
                     ),
                 },
@@ -311,19 +322,19 @@ with tab_session:
                 use_container_width=True,
                 hide_index=True,
                 column_order=[
-                    "presentation_session_fit",
-                    "Standardized Deviation",
+                    "Presentation Session Fit",
+                    "Presentation Standardized Deviation",
                     "Abstract ID",
-                    "Title",
+                    "Presentation Title",
                 ],
                 column_config={
                     "Abstract ID": st.column_config.NumberColumn(format="%i"),
-                    "presentation_session_fit": st.column_config.NumberColumn(
+                    "Presentation Session Fit": st.column_config.NumberColumn(
                         format="%.3f"
                     ),
                     "Session Std Dev": None,
-                    "Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
-                    "Standardized Deviation": st.column_config.NumberColumn(
+                    "Presentation Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
+                    "Presentation Standardized Deviation": st.column_config.NumberColumn(
                         format="%.3f"
                     ),
                 },
