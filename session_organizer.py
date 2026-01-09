@@ -169,6 +169,171 @@ def load_committees(file_path, Committee_Name_column='Committee_Name', Descripti
     
     return df_committees, committee_name_column, description_column, combined_column
 
+def embed_documents_with_genai(df_presentations, topic_column, model_name, api_key=None, df_embeddings=None, delay_seconds=1):
+    """ Embed the presentation topics using Google GenAI with rate limiting and resume capability.
+    Args:
+        df_presentations (pd.DataFrame): DataFrame containing the presentations.
+        topic_column (str): Column name in df_presentations that contains the topics to embed.
+        model_name (str): Name of the Google GenAI model to use.
+        api_key (str, optional): API key for authenticating with Google GenAI.
+        df_embeddings (pd.DataFrame, optional): DataFrame to store the embeddings. If None, a new DataFrame will be created.
+        delay_seconds (float): Delay between API calls to respect rate limits.
+
+    Returns:
+        pd.DataFrame: DataFrame containing the embedded presentation topics.
+    """
+    # Load environment variables
+    load_dotenv(".env")
+    # Check for API key in environment variables if not provided
+    if api_key is None:
+        if "GEMINI_API_KEY" not in os.environ:
+            raise ValueError(
+                "API key must be provided or in environmental variables. GEMINI_API_KEY not found in environment variables. Please set it in your .env file."
+            )
+        else:
+            api_key = os.environ["GEMINI_API_KEY"]
+
+    # Validate API key
+    if not api_key:
+        raise ValueError("API key is required to use Google GenAI.")
+
+    # Extract the topics to embed
+    topics_to_embed = df_presentations[topic_column].tolist()
+    
+    # Initialize or validate existing embeddings DataFrame
+    if df_embeddings is None:
+        df_embeddings = pd.DataFrame(columns=['topic', 'embedding', 'status'])
+    
+    # Identify which topics still need to be embedded
+    already_embedded = set(df_embeddings['topic'].tolist()) if 'topic' in df_embeddings.columns else set()
+    topics_to_process = [topic for topic in topics_to_embed if topic not in already_embedded]
+    
+    print(f"Total topics: {len(topics_to_embed)}")
+    print(f"Already embedded: {len(already_embedded)}")
+    print(f"Topics to process: {len(topics_to_process)}")
+    
+    # Process each topic individually
+    for i, topic in enumerate(topics_to_process):
+        print(f"Processing topic {i+1}/{len(topics_to_process)}: {topic[:50]}...")
+        
+        try:
+            # Call the Google GenAI API for single topic
+            response = call_google_genai_api_single(topic, model_name, api_key)
+            
+            # Process the response and add to embeddings DataFrame
+            if response and hasattr(response, 'embeddings') and response.embeddings:
+                embedding_values = response.embeddings[0].values
+                new_row = pd.DataFrame({
+                    'topic': [topic],
+                    'embedding': [embedding_values],
+                    'status': ['success']
+                })
+                df_embeddings = pd.concat([df_embeddings, new_row], ignore_index=True)
+                print(f"Successfully embedded topic {i+1}")
+            else:
+                # Add failed embedding to track progress
+                new_row = pd.DataFrame({
+                    'topic': [topic],
+                    'embedding': [None],
+                    'status': ['failed']
+                })
+                df_embeddings = pd.concat([df_embeddings, new_row], ignore_index=True)
+                print(f"Failed to embed topic {i+1}")
+        
+        except Exception as e:
+            print(f"Error embedding topic {i+1}: {str(e)}")
+            # Add error to track progress
+            new_row = pd.DataFrame({
+                'topic': [topic],
+                'embedding': [None],
+                'status': ['error']
+            })
+            df_embeddings = pd.concat([df_embeddings, new_row], ignore_index=True)
+        
+        # Rate limiting delay
+        if i < len(topics_to_process) - 1:  # Don't delay after the last item
+            time.sleep(delay_seconds)
+    
+    return df_embeddings
+
+def call_google_genai_api_single(topic, model_name, api_key):
+    """ Call the Google GenAI API to embed a single topic.
+    Args:
+        topic (str): Single topic to embed.
+        model_name (str): Name of the Google GenAI model to use.
+        api_key (str): API key for authenticating with Google GenAI.
+    Returns:
+        response: The response from the Google GenAI API.
+    """
+    try:
+        client = genai.Client(api_key=api_key)
+        
+        result = client.models.embed_content(
+            model=model_name,
+            contents=[topic],  # Single topic in a list
+            config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY")
+        )
+        
+        return result
+    except Exception as e:
+        print(f"API call failed for topic: {str(e)}")
+        return None
+
+def save_embeddings_to_file(df_embeddings, filename="embeddings_backup.pkl"):
+    """ Save embeddings DataFrame to a pickle file for backup/resume capability.
+    Args:
+        df_embeddings (pd.DataFrame): DataFrame containing embeddings.
+        filename (str): Name of the backup file.
+    """
+    df_embeddings.to_pickle(filename)
+    print(f"Embeddings saved to {filename}")
+
+def load_embeddings_from_file(filename="embeddings_backup.pkl"):
+    """ Load embeddings DataFrame from a pickle file.
+    Args:
+        filename (str): Name of the backup file.
+    Returns:
+        pd.DataFrame: DataFrame containing embeddings, or None if file doesn't exist.
+    """
+    try:
+        df_embeddings = pd.read_pickle(filename)
+        print(f"Embeddings loaded from {filename}")
+        return df_embeddings
+    except FileNotFoundError:
+        print(f"Backup file {filename} not found. Starting fresh.")
+        return None
+    except Exception as e:
+        print(f"Error loading backup file: {str(e)}")
+        return None
+
+# Example usage with resume capability
+def embed_with_resume(df_presentations, topic_column, model_name, backup_filename="embeddings_backup.pkl"):
+    """ Embed documents with automatic backup and resume capability.
+    Args:
+        df_presentations (pd.DataFrame): DataFrame containing the presentations.
+        topic_column (str): Column name containing topics to embed.
+        model_name (str): Name of the Google GenAI model to use.
+        backup_filename (str): Name of the backup file.
+    Returns:
+        pd.DataFrame: DataFrame containing the embedded presentation topics.
+    """
+    # Try to load existing embeddings
+    df_embeddings = load_embeddings_from_file(backup_filename)
+    
+    # Embed documents
+    df_embeddings = embed_documents_with_genai(
+        df_presentations=df_presentations,
+        topic_column=topic_column,
+        model_name=model_name,
+        df_embeddings=df_embeddings,
+        delay_seconds=1  # Adjust delay as needed for rate limits
+    )
+    
+    # Save backup
+    save_embeddings_to_file(df_embeddings, backup_filename)
+    
+    return df_embeddings
+
 def embed_documents(df_presentations, topic_column, embedding_model):
     if not isinstance(embedding_model, SentenceTransformer):
         raise ValueError("embedding_model must be an instance of SentenceTransformer.")
