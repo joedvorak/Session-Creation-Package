@@ -1,5 +1,4 @@
 import pandas as pd
-from sentence_transformers import SentenceTransformer
 import random
 import torch
 import numpy as np
@@ -1412,6 +1411,7 @@ def generate_session_titles_and_keywords_gemini(
     topic_column="Title and Abstract",
     prompt_template=None,
     api_key=None,
+    model_name="gemini-2.0-flash",
 ):
     """
     Generate session titles and keywords using Google's Gemini API.
@@ -1484,7 +1484,7 @@ def generate_session_titles_and_keywords_gemini(
             )
 
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=model_name,
                 contents=formatted_prompt,
                 config={
                     "response_mime_type": "application/json",
@@ -1763,9 +1763,9 @@ def generate_session_titles_and_keywords(
     Returns:
         pd.DataFrame: df_sessions with added columns for generated titles and keywords
     """
-    if model_name == "gemini-2.0-flash":
+    if model_name.startswith("gemini"):
         return generate_session_titles_and_keywords_gemini(
-            df_sessions, df_presentations, topic_column, prompt_template, api_key
+            df_sessions, df_presentations, topic_column, prompt_template, api_key, model_name=model_name
         )
     elif model_name == "llama-3.2-local":
         return generate_session_titles_and_keywords_llama_local(
