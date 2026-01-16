@@ -286,7 +286,7 @@ with tab_session:
             f"**Session Coherence:** {selected_session_df.iloc[0]['session_coherence']:.3f}"
         )
         df_selected_session = df_presentations[
-            df_presentations["Session"] == selected_session
+            df_presentations["Session Code"] == selected_session
         ]
         if (
             "Abstract" in df_selected_session
