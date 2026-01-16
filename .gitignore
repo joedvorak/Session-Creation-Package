@@ -23,9 +23,9 @@ __pycache__/
 *.csv
 *.xlsx
 *.json
-*.parquet
+#*.parquet
 *.pkl
-*.crypt
+#*.crypt
 
 # Presentation Data
 df_presentations.pkl
