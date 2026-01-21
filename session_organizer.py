@@ -168,18 +168,22 @@ def load_committees(file_path, Committee_Name_column='Committee_Name', Descripti
     
     return df_committees, committee_name_column, description_column, combined_column
 
-def embed_documents_with_genai(df_presentations, topic_column, model_name, api_key=None, df_embeddings=None, delay_seconds=1):
+def embed_documents_with_genai(df_presentations, topic_column, model_name, embedding_model_name, api_key=None, delay_seconds=0):
     """ Embed the presentation topics using Google GenAI with rate limiting and resume capability.
+    
+    Updates df_presentations in place by adding/updating the 'embedding' column with embedding vectors.
+    Only embeds presentations that have null embeddings, allowing for resume capability.
+    
     Args:
-        df_presentations (pd.DataFrame): DataFrame containing the presentations.
+        df_presentations (pd.DataFrame): DataFrame containing the presentations. Will be modified in place.
         topic_column (str): Column name in df_presentations that contains the topics to embed.
-        model_name (str): Name of the Google GenAI model to use.
+        model_name (str): Name of the Google GenAI model to use (e.g., 'embedding-001').
+        embedding_model_name (str): Display name for the embedding model to store in metadata.
         api_key (str, optional): API key for authenticating with Google GenAI.
-        df_embeddings (pd.DataFrame, optional): DataFrame to store the embeddings. If None, a new DataFrame will be created.
         delay_seconds (float): Delay between API calls to respect rate limits.
 
     Returns:
-        pd.DataFrame: DataFrame containing the embedded presentation topics.
+        pd.DataFrame: The modified df_presentations with 'embedding' column populated.
     """
     # Load environment variables
     load_dotenv(".env")
@@ -196,64 +200,45 @@ def embed_documents_with_genai(df_presentations, topic_column, model_name, api_k
     if not api_key:
         raise ValueError("API key is required to use Google GenAI.")
 
-    # Extract the topics to embed
-    topics_to_embed = df_presentations[topic_column].tolist()
+    # Initialize embedding column if it doesn't exist
+    if 'embedding' not in df_presentations.columns:
+        df_presentations['embedding'] = None
     
-    # Initialize or validate existing embeddings DataFrame
-    if df_embeddings is None:
-        df_embeddings = pd.DataFrame(columns=['topic', 'embedding', 'status'])
+    # Find indices that need embeddings (null embeddings)
+    indices_needing_embeddings = df_presentations[df_presentations['embedding'].isna()].index.tolist()
     
-    # Identify which topics still need to be embedded
-    already_embedded = set(df_embeddings['topic'].tolist()) if 'topic' in df_embeddings.columns else set()
-    topics_to_process = [topic for topic in topics_to_embed if topic not in already_embedded]
+    total_presentations = len(df_presentations)
+    already_embedded = total_presentations - len(indices_needing_embeddings)
     
-    print(f"Total topics: {len(topics_to_embed)}")
-    print(f"Already embedded: {len(already_embedded)}")
-    print(f"Topics to process: {len(topics_to_process)}")
+    print(f"Total presentations: {total_presentations}")
+    print(f"Already embedded: {already_embedded}")
+    print(f"Presentations to process: {len(indices_needing_embeddings)}")
     
-    # Process each topic individually
-    for i, topic in enumerate(topics_to_process):
-        print(f"Processing topic {i+1}/{len(topics_to_process)}: {topic[:50]}...")
+    # Process each presentation that needs embedding
+    for count, idx in enumerate(indices_needing_embeddings):
+        topic = df_presentations.loc[idx, topic_column]
+        print(f"Processing presentation {count+1}/{len(indices_needing_embeddings)}: {topic[:50]}...")
         
         try:
             # Call the Google GenAI API for single topic
             response = call_google_genai_api_single(topic, model_name, api_key)
             
-            # Process the response and add to embeddings DataFrame
+            # Process the response and add to DataFrame
             if response and hasattr(response, 'embeddings') and response.embeddings:
                 embedding_values = response.embeddings[0].values
-                new_row = pd.DataFrame({
-                    'topic': [topic],
-                    'embedding': [embedding_values],
-                    'status': ['success']
-                })
-                df_embeddings = pd.concat([df_embeddings, new_row], ignore_index=True)
-                print(f"Successfully embedded topic {i+1}")
+                df_presentations.at[idx, 'embedding'] = embedding_values
+                print(f"Successfully embedded presentation {count+1}")
             else:
-                # Add failed embedding to track progress
-                new_row = pd.DataFrame({
-                    'topic': [topic],
-                    'embedding': [None],
-                    'status': ['failed']
-                })
-                df_embeddings = pd.concat([df_embeddings, new_row], ignore_index=True)
-                print(f"Failed to embed topic {i+1}")
+                print(f"Failed to embed presentation {count+1}")
         
         except Exception as e:
-            print(f"Error embedding topic {i+1}: {str(e)}")
-            # Add error to track progress
-            new_row = pd.DataFrame({
-                'topic': [topic],
-                'embedding': [None],
-                'status': ['error']
-            })
-            df_embeddings = pd.concat([df_embeddings, new_row], ignore_index=True)
+            print(f"Error embedding presentation {count+1}: {str(e)}")
         
         # Rate limiting delay
-        if i < len(topics_to_process) - 1:  # Don't delay after the last item
+        if count < len(indices_needing_embeddings) - 1:  # Don't delay after the last item
             time.sleep(delay_seconds)
     
-    return df_embeddings
+    return df_presentations
 
 def call_google_genai_api_single(topic, model_name, api_key):
     """ Call the Google GenAI API to embed a single topic.
@@ -278,26 +263,32 @@ def call_google_genai_api_single(topic, model_name, api_key):
         print(f"API call failed for topic: {str(e)}")
         return None
 
-def save_embeddings_to_file(df_embeddings, filename="embeddings_backup.pkl"):
-    """ Save embeddings DataFrame to a pickle file for backup/resume capability.
+def save_presentations_with_embeddings(df_presentations, filename="presentations_with_embeddings.parquet"):
+    """ Save presentations DataFrame with embeddings to a parquet file for backup/resume capability.
+    
     Args:
-        df_embeddings (pd.DataFrame): DataFrame containing embeddings.
-        filename (str): Name of the backup file.
+        df_presentations (pd.DataFrame): DataFrame containing presentations and their embeddings.
+        filename (str): Name of the backup file. Defaults to presentations_with_embeddings.parquet.
     """
-    df_embeddings.to_pickle(filename)
-    print(f"Embeddings saved to {filename}")
+    try:
+        df_presentations.to_parquet(filename, compression='snappy')
+        print(f"Presentations with embeddings saved to {filename}")
+    except Exception as e:
+        print(f"Error saving presentations to parquet: {str(e)}")
+        raise
 
-def load_embeddings_from_file(filename="embeddings_backup.pkl"):
-    """ Load embeddings DataFrame from a pickle file.
+def load_presentations_with_embeddings(filename="presentations_with_embeddings.parquet"):
+    """ Load presentations DataFrame with embeddings from a parquet file.
+    
     Args:
         filename (str): Name of the backup file.
     Returns:
-        pd.DataFrame: DataFrame containing embeddings, or None if file doesn't exist.
+        pd.DataFrame: DataFrame containing presentations with embeddings, or None if file doesn't exist.
     """
     try:
-        df_embeddings = pd.read_pickle(filename)
-        print(f"Embeddings loaded from {filename}")
-        return df_embeddings
+        df_presentations = pd.read_parquet(filename)
+        print(f"Presentations with embeddings loaded from {filename}")
+        return df_presentations
     except FileNotFoundError:
         print(f"Backup file {filename} not found. Starting fresh.")
         return None
@@ -306,162 +297,145 @@ def load_embeddings_from_file(filename="embeddings_backup.pkl"):
         return None
 
 # Example usage with resume capability
-def embed_with_resume(df_presentations, topic_column, model_name, backup_filename="embeddings_backup.pkl"):
+def embed_with_resume(df_presentations, topic_column, model_name, embedding_model_name=None, 
+                      backup_filename="presentations_with_embeddings.parquet", delay_seconds=0):
     """ Embed documents with automatic backup and resume capability.
+    
+    Loads existing presentations with embeddings from parquet if available, then embeds
+    any presentations with missing embeddings. Only processes presentations where the
+    topic text matches exactly (detects if text has changed).
+    
     Args:
         df_presentations (pd.DataFrame): DataFrame containing the presentations.
         topic_column (str): Column name containing topics to embed.
-        model_name (str): Name of the Google GenAI model to use.
-        backup_filename (str): Name of the backup file.
+        model_name (str): Name of the Google GenAI model to use (e.g., 'embedding-001').
+        embedding_model_name (str): Display name for the embedding model. If None, defaults to model_name.
+        backup_filename (str): Name of the backup parquet file.
+        delay_seconds (int): Number of seconds to delay between API calls.
     Returns:
-        pd.DataFrame: DataFrame containing the embedded presentation topics.
+        pd.DataFrame: DataFrame containing the presentations with embeddings populated.
     """
-    # Try to load existing embeddings
-    df_embeddings = load_embeddings_from_file(backup_filename)
+    if embedding_model_name is None:
+        embedding_model_name = model_name
     
-    # Embed documents
-    df_embeddings = embed_documents_with_genai(
+    # Try to load existing presentations with embeddings
+    df_loaded = load_presentations_with_embeddings(backup_filename)
+    
+    if df_loaded is not None:
+        # Merge loaded embeddings back into current presentations by matching on topic column
+        # This allows resume capability while detecting if topic text has changed (exact match only)
+        df_presentations = df_presentations.copy()
+        
+        # Create a mapping of topics to embeddings from the loaded data
+        topic_to_embedding = {}
+        if 'embedding' in df_loaded.columns and topic_column in df_loaded.columns:
+            for idx, row in df_loaded.iterrows():
+                topic = row[topic_column]
+                embedding = row['embedding']
+                # Only map non-null embeddings (check if not None and not NaN)
+                if embedding is not None and not (isinstance(embedding, float) and pd.isna(embedding)):
+                    topic_to_embedding[topic] = embedding
+        
+        # Initialize embedding column if it doesn't exist
+        if 'embedding' not in df_presentations.columns:
+            df_presentations['embedding'] = None
+        
+        # Add embeddings from loaded data where topics match exactly
+        for idx, row in df_presentations.iterrows():
+            topic = row[topic_column]
+            if topic in topic_to_embedding:
+                df_presentations.at[idx, 'embedding'] = topic_to_embedding[topic]
+    
+    # Embed any remaining presentations with null embeddings
+    df_presentations = embed_documents_with_genai(
         df_presentations=df_presentations,
         topic_column=topic_column,
         model_name=model_name,
-        df_embeddings=df_embeddings,
-        delay_seconds=1  # Adjust delay as needed for rate limits
+        embedding_model_name=embedding_model_name,
+        delay_seconds=delay_seconds
     )
     
     # Save backup
-    save_embeddings_to_file(df_embeddings, backup_filename)
+    save_presentations_with_embeddings(df_presentations, backup_filename)
     
-    return df_embeddings
+    return df_presentations
 
-def embed_documents(df_presentations, topic_column, embedding_model):
-    if not isinstance(embedding_model, SentenceTransformer):
-        raise ValueError("embedding_model must be an instance of SentenceTransformer.")
-    if topic_column not in df_presentations.columns:
-        raise ValueError(f"topic_column '{topic_column}' must be present in the DataFrame.")
+def extract_embeddings_dataframe(df_presentations, embedding_model_name, embedding_column='embedding'):
+    """ Extract embeddings from presentations DataFrame for backwards compatibility.
     
-    # Extract model name for the new column
-    model_name = getattr(embedding_model, 'model_name_or_path', 'Unknown')
-    if hasattr(embedding_model, 'model_card_data') and embedding_model.model_card_data:
-        base_model = getattr(embedding_model.model_card_data, 'base_model', None)
-        if base_model:
-            model_info = f"{model_name} ({base_model})"
+    Converts df_presentations with an embedding column into the legacy format expected by
+    downstream functions like create_sessions_w_hybrid() and remove_duplicates().
+    
+    Args:
+        df_presentations (pd.DataFrame): DataFrame containing presentations with embedding column.
+        embedding_model_name (str): Name of the embedding model used.
+        embedding_column (str): Name of the column containing embeddings. Defaults to 'embedding'.
+    
+    Returns:
+        pd.DataFrame: DataFrame with columns [embedding_columns..., 'embedding_model'] suitable for clustering.
+    
+    Raises:
+        ValueError: If embedding_column is not found in df_presentations.
+        ValueError: If there are null embeddings in the embedding column.
+    """
+    if embedding_column not in df_presentations.columns:
+        raise ValueError(f"Column '{embedding_column}' not found in df_presentations")
+    
+    # Check for null embeddings
+    null_embeddings = df_presentations[embedding_column].isna().sum()
+    if null_embeddings > 0:
+        raise ValueError(f"Cannot extract embeddings: {null_embeddings} presentations have null embeddings. "
+                        "All presentations must be embedded before calling this function.")
+    
+    # Convert embedding vectors to separate columns
+    df_embeddings = df_presentations[[embedding_column]].copy()
+    
+    # Extract embedding vectors into individual columns
+    embedding_vectors = []
+    for embedding in df_embeddings[embedding_column]:
+        if isinstance(embedding, (list, np.ndarray)):
+            embedding_vectors.append(embedding)
         else:
-            model_info = model_name
-    else:
-        model_info = model_name
+            raise ValueError(f"Invalid embedding type: {type(embedding)}. Expected list or numpy array.")
     
-    if getattr(embedding_model.model_card_data, "base_model", None) in ["jxm/cde-small-v1", "jxm/cde-small-v2"]:
-        # This is the CDE model, so we need to use the special CDE embedding function
-        return cde_embed_documents(df_presentations, topic_column, embedding_model, model_info)
-    else:
-        # This is a standard SentenceTransformer model, so we can use the standard embedding function
-        return standard_embed_documents(df_presentations, topic_column, embedding_model, model_info)
-
-def standard_embed_documents(df_presentations, topic_column, embedding_model, model_info):
-    """
-    Embed the presentation topics using a standard SentenceTransformer model.
+    # Convert to DataFrame with one column per dimension
+    embeddings_array = np.array(embedding_vectors)
+    embedding_cols = [f'dim_{i}' for i in range(embeddings_array.shape[1])]
+    df_embeddings_numeric = pd.DataFrame(embeddings_array, columns=embedding_cols, index=df_presentations.index)
     
-    Args:
-        df_presentations (pd.DataFrame): DataFrame containing the presentations.
-        topic_column (str): Column name in df_presentations that contains the topics to embed.
-        embedding_model (SentenceTransformer): The SentenceTransformer model to use for embedding.
-        model_info (str): Information about the embedding model used.
-        
-    Returns:
-        pd.DataFrame: DataFrame containing the embeddings of the presentation topics with model info.
-    """
-    # Text to embed
-    presentation_topics = df_presentations[topic_column].tolist()
-    # Embed the titles and abstracts using the SentenceTransformer model
-    presentation_embeddings = embedding_model.encode(
-        presentation_topics,
-        convert_to_tensor=True,
-        show_progress_bar=True
-    )
-
-    df_presentation_embeddings = pd.DataFrame(presentation_embeddings.cpu(), index = df_presentations.index)
+    # Add embedding model name as final column
+    df_embeddings_numeric[COLUMNS['EMBEDDING_MODEL']] = embedding_model_name
     
-    # Add model information column
-    df_presentation_embeddings[COLUMNS['EMBEDDING_MODEL']] = model_info
-    
-    return df_presentation_embeddings
+    return df_embeddings_numeric
 
-def cde_embed_documents(df_presentations, topic_column, cde_embeddings_model, model_info):
-    """
-    Embed the presentation topics using a CDE (Contextual Document Embeddings) model.
-    Args:
-        df_presentations (pd.DataFrame): DataFrame containing the presentations.
-        topic_column (str): Column name in df_presentations that contains the topics to embed.
-        cde_embeddings_model (SentenceTransformer): The CDE SentenceTransformer model to use for embedding.
-        model_info (str): Information about the embedding model used.
-    Returns:
-        pd.DataFrame: DataFrame containing the embeddings of the presentation topics with model info.
-    """
-    # Text to embed
-    presentation_topics = df_presentations[topic_column].tolist()
-
-    # Embed the titles and abstracts
-    # First, create a minicorpus of as required by the CDE model.
-    minicorpus_size = cde_embeddings_model[0].config.transductive_corpus_size
-    # Get the unique elements from the original population
-    #    Using list(set(...)) ensures uniqueness and handles potential duplicates in presentation_topics
-    unique_docs = list(set(presentation_topics))
-    num_unique = len(unique_docs)
-    if minicorpus_size < num_unique:
-        # If the minicorpus size is smaller than the number of unique documents, sample without replacement
-        minicorpus_docs = random.sample(presentation_topics, k=minicorpus_size)
-    else: 
-        # Start the minicorpus with all unique documents
-        minicorpus_docs = list(unique_docs) # Make a copy to start
-
-        # Calculate how many more documents are needed
-        remaining_needed = minicorpus_size - num_unique
-
-        # If more are needed, sample *with replacement* from the *original* population
-        if remaining_needed > 0:
-            # Sample the remaining items randomly WITH replacement from the original presentation_topics
-            additional_docs = random.choices(presentation_topics, k=remaining_needed)
-            # Add these to the minicorpus
-            minicorpus_docs.extend(additional_docs)
-    assert len(minicorpus_docs) == minicorpus_size # You must use exactly this many documents in the minicorpus. You can oversample if your corpus is smaller.
-
-    cde_dataset_embeddings = cde_embeddings_model.encode(
-        minicorpus_docs,
-        prompt_name="document",
-        convert_to_tensor=True,
-        show_progress_bar=True
-    )
-
-    # Now embed the titles and abstracts using the CDE embeddings model
-    presentation_embeddings = cde_embeddings_model.encode(
-        presentation_topics,
-        prompt_name="document",
-        dataset_embeddings=cde_dataset_embeddings,
-        convert_to_tensor=True,
-        show_progress_bar=True
-    )
-    df_presentation_embeddings = pd.DataFrame(presentation_embeddings.cpu(), index = df_presentations.index)
-
-    # Add model information column
-    df_presentation_embeddings[COLUMNS['EMBEDDING_MODEL']] = model_info
-
-    return df_presentation_embeddings
-
-def remove_duplicates(df_presentations, df_embeddings, similarity_func, threshold=0.95):
+def remove_duplicates(df_presentations, similarity_func, embedding_column='embedding', threshold=0.95):
     """
     Remove near-duplicate rows based on a similarity threshold.
+    
     Args:
-        df_presentations (pd.DataFrame): DataFrame containing presentation data.
-        df_embeddings (pd.DataFrame): DataFrame containing presentation embeddings.
+        df_presentations (pd.DataFrame): DataFrame containing presentation data with embedding column.
         similarity_func (callable): Function to compute similarity between embeddings.
+        embedding_column (str): Name of the column containing embeddings.
         threshold (float): Similarity threshold for considering items as near duplicates.
     Returns:
-        pd.DataFrame: Presentations DataFrame with near-duplicate rows removed.
-        pd.DataFrame: Embeddings DataFrame with near-duplicate rows removed.
+        tuple: (df_presentations, df_embeddings) where df_embeddings is the legacy format for backwards compatibility.
     """
+    # Validate and extract embeddings
+    if embedding_column not in df_presentations.columns:
+        raise ValueError(f"Column '{embedding_column}' not found in df_presentations")
+    
     # Get the indices from the dataframe (important for referencing)
     presentation_indices = df_presentations.index.tolist()
-    embeddings_array = df_embeddings.drop(columns=[COLUMNS['EMBEDDING_MODEL']]).values
+    
+    # Convert embedding vectors to numpy array
+    embedding_vectors = []
+    for embedding in df_presentations[embedding_column]:
+        if isinstance(embedding, (list, np.ndarray)):
+            embedding_vectors.append(embedding)
+        else:
+            raise ValueError(f"Invalid embedding type: {type(embedding)}. Expected list or numpy array.")
+    
+    embeddings_array = np.array(embedding_vectors)
     
     # Create a set to store the indices we want to REMOVE
     indices_to_remove = set()
@@ -499,21 +473,14 @@ def remove_duplicates(df_presentations, df_embeddings, similarity_func, threshol
 
     # --- Perform the removal ---
     df_presentations = df_presentations.drop(index=indices_to_remove_list)
-    df_embeddings = df_embeddings.drop(index=indices_to_remove_list)
 
     # --- Verification ---
     print(f"\nFinal number of oral presentations: {len(df_presentations)}")
-    print(f"Final shape of embeddings matrix: {df_embeddings.shape}")
-
-    # Verify indices still match
-    if not df_presentations.index.equals(df_embeddings.index):
-        raise ValueError("DataFrame indices don't match after duplicate removal!")
 
     # Reset the index of the DataFrames to ensure they are clean and sequential
     df_presentations = df_presentations.reset_index(drop=True)
-    df_embeddings = df_embeddings.reset_index(drop=True)
     
-    return df_presentations, df_embeddings
+    return df_presentations
 
 def get_unique_top_indices_variable(data_array, target_counts):
     """
@@ -681,7 +648,7 @@ def create_sessions_w_hybrid(df_presentations, similarity_func, df_presentation_
         final_session_title_column (str): The name of the column to store the final session titles.
 
     Returns:
-        tuple: (df_presentations, df_sessions, labels, metadata)
+        tuple: (df_sessions, labels, metadata)
     Raises:
         ValueError: If parameters are invalid.
     """
@@ -1055,141 +1022,6 @@ def calculate_placement_metrics(df_presentations, df_sessions, pres_similarities
             
     return presentation_session_fit_series, session_average_similarity_series, session_distinctiveness_series, session_session_similarity_dataframe
 
-
-# def calculate_avg_similarity(df_sessions, similarity_matrix):
-#     """
-#     Calculate average intra-cluster similarity for each cluster.
-    
-#     Args:
-#         df_sessions (pd.DataFrame): DataFrame with cluster assignments
-#         similarity_matrix (np.ndarray): Similarity matrix of presentations
-        
-#     Returns:
-#         list: Average similarity scores for each cluster
-#     """
-#     avg_similarities = []
-    
-#     for _, row in df_sessions.iterrows():
-#         cluster_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
-        
-#         if len(cluster_indices) < 2:
-#             # Single item clusters have no internal similarity
-#             avg_similarities.append(np.nan)
-#             continue
-        
-#         # Get all pairwise similarities within the cluster
-#         cluster_similarities = []
-#         for i in range(len(cluster_indices)):
-#             for j in range(i + 1, len(cluster_indices)):
-#                 idx_i = cluster_indices[i]
-#                 idx_j = cluster_indices[j]
-#                 cluster_similarities.append(similarity_matrix[idx_i, idx_j])
-        
-#         # Calculate average similarity
-#         avg_similarity = np.mean(cluster_similarities)
-#         avg_similarities.append(avg_similarity)
-    
-#     return avg_similarities
-
-# def calculate_silhouette_scores(df_sessions, similarity_array, labels, ):
-#     """
-#     Calculate silhouette scores using the same similarity function as the embedding model.
-    
-#     Args:
-#         df_sessions (pd.DataFrame): DataFrame with cluster assignments
-#         similarity_array (np.ndarray): Precomputed similarity matrix
-#         labels (list): List of cluster labels for each presentation
-
-
-#     Returns:
-#         list: Silhouette scores for each cluster
-#     """
-#     from sklearn.metrics import silhouette_samples
-    
-#     # Convert labels to numpy array and handle unassigned items
-#     labels_array = np.array(labels)
-
-#     # Convert similarity to distance: distance = 1 - similarity
-#     # Ensure diagonal is exactly 0 for numerical stability
-#     distance_matrix = 1 - similarity_array
-#     np.fill_diagonal(distance_matrix, 0)
-    
-#     # Only calculate silhouette for assigned items (exclude -1 labels)
-#     assigned_mask = labels_array != -1
-    
-#     if np.sum(assigned_mask) < 2:
-#         return [np.nan] * len(df_sessions)
-    
-#     # Filter distance matrix and labels for assigned items
-#     distance_matrix = distance_matrix[assigned_mask][:, assigned_mask]
-#     assigned_labels = labels_array[assigned_mask]
-    
-#     # Check if we have at least 2 different clusters
-#     unique_labels = np.unique(assigned_labels)
-#     if len(unique_labels) < 2:
-#         return [np.nan] * len(df_sessions)
-       
-#     # Calculate silhouette scores for each sample
-#     sample_scores = silhouette_samples(distance_matrix, assigned_labels, metric='precomputed')
-    
-#     # Calculate average silhouette score for each cluster
-#     cluster_silhouette_scores = []
-    
-#     for _, row in df_sessions.iterrows():
-#         cluster_id = row[COLUMNS['CLUSTER_ID']]
-        
-#         # Find samples belonging to this cluster in the assigned data
-#         cluster_mask = assigned_labels == cluster_id
-        
-#         if np.sum(cluster_mask) > 0:
-#             cluster_score = np.mean(sample_scores[cluster_mask])
-#             cluster_silhouette_scores.append(cluster_score)
-#         else:
-#             cluster_silhouette_scores.append(np.nan)
-    
-#     return cluster_silhouette_scores
-
-# def calculate_document_similarities(similarity_matrix, labels):
-#     """
-    
-#     Calculate average similarity of each document to others in its cluster
-#     This version has been vectorized for better performance with large datasets
-#     Args:
-#         similarity_matrix (np.ndarray): Similarity matrix of shape (n_samples, n_samples)
-#         labels (array-like): Cluster labels for each document
-    
-#     Returns:
-#         np.ndarray: Average similarity of each document to its cluster
-#     """
-#         # Ensure labels is a numpy array for proper vectorized operations
-#     labels = np.array(labels)
-    
-#     # Input validation
-#     n_samples = len(labels)
-#     if similarity_matrix.shape[0] != n_samples or similarity_matrix.shape[1] != n_samples:
-#         raise ValueError(f"Similarity matrix shape {similarity_matrix.shape} doesn't match labels length {n_samples}")
-#     document_similarities = np.zeros(n_samples)
-    
-#     # Process each unique cluster
-#     unique_labels = np.unique(labels)
-#     unique_labels = unique_labels[unique_labels != -1]  # Exclude unassigned
-    
-#     for cluster_label in unique_labels:
-#         cluster_mask = labels == cluster_label
-#         cluster_indices = np.where(cluster_mask)[0]
-        
-#         if len(cluster_indices) > 1:  # Only process multi-item clusters
-#             # Extract submatrix for this cluster
-#             cluster_sim_matrix = similarity_matrix[np.ix_(cluster_indices, cluster_indices)]
-            
-#             # Calculate mean similarity for each item (excluding diagonal)
-#             cluster_means = (cluster_sim_matrix.sum(axis=1) - np.diag(cluster_sim_matrix)) / (len(cluster_indices) - 1)
-            
-#             # Assign back to main array
-#             document_similarities[cluster_indices] = cluster_means
-    
-#     return document_similarities
-
 # Default prompts as module-level constants
 DEFAULT_SESSION_PROMPT = """I am organizing oral research presentation sessions for the American Society of Biological and Agricultural Engineers Annual International Meeting. Please provide 3 options for the name/title of a session. Also provide 5 keywords describing the session. The name and keywords should highlight the commonality among all presentations. The target audience for titles and keywords is engineering designers and researchers. The title should be descriptive of the content and be interesting and engaging. It should be less than 100 characters long.
 
@@ -1561,187 +1393,6 @@ def generate_session_titles_and_keywords_gemini(
     return df_sessions_with_titles
 
 
-def generate_session_titles_and_keywords_llama_local(
-    df_sessions,
-    df_presentations,
-    topic_column="Title and Abstract",
-    prompt_template=None,
-):
-    """
-    Generate session titles and keywords using LLaMA locally via llama-cpp-python.
-
-    Args:
-        df_sessions (pd.DataFrame): DataFrame with session information from create_sessions()
-        df_presentations (pd.DataFrame): DataFrame with presentation data
-        topic_column (str): Column name containing the combined title and abstract text
-        prompt_template (str): Custom prompt template with {presentations} placeholder
-
-    Returns:
-        pd.DataFrame: df_sessions with added columns for generated titles and keywords
-    """
-    import llama_cpp
-    import json
-    import time
-
-    # Use default prompt if none provided
-    if prompt_template is None:
-        prompt_template = DEFAULT_SESSION_PROMPT
-
-    # Initialize model with updated parameters
-    try:
-        model = llama_cpp.Llama(
-            model_path="llama-3.2-3b-instruct-q8_0.gguf",
-            n_ctx=0,  # Do not set a specific context size
-            n_gpu_layers=-1,  # Use all available GPU layers (if any) or CPU (if no GPU is available)
-            verbose=False,  # Reduce verbose output
-            chat_format="llama-3",  # Specify chat format for LLaMA 3.x
-            n_threads=None,  # Auto-detect optimal thread count
-        )
-        print("LLaMA model loaded successfully")
-    except Exception as e:
-        raise RuntimeError(f"Failed to load LLaMA model: {e}")
-
-    # Create sessions dictionary from df_sessions
-    sessions_dict = {}
-    for _, row in df_sessions.iterrows():
-        session_num = row[COLUMNS['CLUSTER_ID']]
-        presentation_indices = row[COLUMNS['GEN_PRESENTATION_INDICES']]
-
-        sessions_dict[session_num] = {
-            "Indices": presentation_indices,
-            "Presentations": [],
-        }
-
-        for index in presentation_indices:
-            try:
-                title_abstract = df_presentations.loc[index, topic_column]
-                sessions_dict[session_num]["Presentations"].append(title_abstract)
-            except KeyError:
-                print(
-                    f"Warning: Index {index} not found in df_presentations for session {session_num}. Skipping."
-                )
-                continue
-
-    start_time = time.time()
-    total_sessions = len(sessions_dict)
-
-    # Iterate over the sessions and prompt the LLM for the session title and keywords
-    for idx, (session_key, session_value) in enumerate(sessions_dict.items(), 1):
-        print(f"Processing session {session_key} ({idx}/{total_sessions})...")
-
-        # Format the prompt with the presentations
-        formatted_prompt = prompt_template.format(
-            presentations=str(session_value["Presentations"])
-        )
-
-        messages = [{"role": "user", "content": formatted_prompt}]
-
-        try:
-            session_titleAbsLlama = model.create_chat_completion(
-                messages=messages,
-                response_format={
-                    "type": "json_object",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "title1": {"type": "string"},
-                            "title2": {"type": "string"},
-                            "title3": {"type": "string"},
-                            "keywords": {"type": "string"},
-                        },
-                        "required": ["title1", "title2", "title3", "keywords"],
-                    },
-                },
-                temperature=0.7,  # Add temperature control
-                max_tokens=500,  # Limit response length
-                top_p=0.9,  # Add top_p sampling
-            )
-
-            text_answer = session_titleAbsLlama["choices"][0]["message"]["content"]
-
-            try:
-                # Parse the JSON string into a Python dictionary
-                answer_dict = json.loads(text_answer)
-
-                # Access the values using the dictionary keys
-                title_1 = answer_dict.get("title1", f"No Title Generated")
-                title_2 = answer_dict.get("title2", f"No Title Generated")
-                title_3 = answer_dict.get("title3", f"No Title Generated")
-                keywords = answer_dict.get(
-                    "keywords",
-                    "No Keywords Generated",
-                )
-
-                # Now you can save the titles and keywords
-                session_value["Llama Title 1"] = title_1
-                session_value["Llama Title 2"] = title_2
-                session_value["Llama Title 3"] = title_3
-                session_value["Llama Keywords"] = keywords
-
-                print(f"  ✓ Generated titles for session {session_key}")
-
-            except json.JSONDecodeError as e:
-                print(f"  ✗ Error decoding JSON for session {session_key}: {e}")
-                print(f"Problematic JSON string: {text_answer}")
-                # Handle the error appropriately, e.g., set default values or skip the session
-                session_value["Llama Title 1"] = "Error: Could not generate title"
-                session_value["Llama Title 2"] = "Error: Could not generate title"
-                session_value["Llama Title 3"] = "Error: Could not generate title"
-                session_value["Llama Keywords"] = "Error: Could not generate keywords"
-
-        except Exception as e:
-            print(f"  ✗ Error processing session {session_key}: {e}")
-            session_value["Llama Title 1"] = f"No Title Generated"
-            session_value["Llama Title 2"] = f"No Title Generated"
-            session_value["Llama Title 3"] = f"No Title Generated"
-            session_value["Llama Keywords"] = (
-                "No Keywords Generated"
-            )
-
-    end_time = time.time()
-    llama_elapsed_time = end_time - start_time
-    print(f"\nTotal processing time: {llama_elapsed_time:.4f} seconds")
-    print(f"Average time per session: {llama_elapsed_time/total_sessions:.4f} seconds")
-
-    # Add the generated content back to df_sessions
-    df_sessions_with_titles = df_sessions.copy()
-
-    # Create lists to store the generated content in the same order as df_sessions
-    title_1_list = []
-    title_2_list = []
-    title_3_list = []
-    keywords_list = []
-
-    for _, row in df_sessions_with_titles.iterrows():
-        session_id = row[COLUMNS['CLUSTER_ID']]
-        if session_id in sessions_dict:
-            title_1_list.append(
-                sessions_dict[session_id].get("Llama Title 1", "No Title Generated")
-            )
-            title_2_list.append(
-                sessions_dict[session_id].get("Llama Title 2", "No Title Generated")
-            )
-            title_3_list.append(
-                sessions_dict[session_id].get("Llama Title 3", "No Title Generated")
-            )
-            keywords_list.append(
-                sessions_dict[session_id].get("Llama Keywords", "No Keywords Generated")
-            )
-        else:
-            title_1_list.append("No Title Generated")
-            title_2_list.append("No Title Generated")
-            title_3_list.append("No Title Generated")
-            keywords_list.append("No Keywords Generated")
-
-    # Add the new columns to the DataFrame
-    df_sessions_with_titles["Llama Title 1"] = title_1_list
-    df_sessions_with_titles["Llama Title 2"] = title_2_list
-    df_sessions_with_titles["Llama Title 3"] = title_3_list
-    df_sessions_with_titles["Llama Keywords"] = keywords_list
-
-    return df_sessions_with_titles
-
-
 def generate_session_titles_and_keywords(
     df_sessions,
     df_presentations,
@@ -1757,7 +1408,7 @@ def generate_session_titles_and_keywords(
         df_sessions: DataFrame with session information
         df_presentations: DataFrame with presentation data
         topic_column: Column name containing presentation text
-        model_name: Model to use ('gemini-2.0-flash', 'llama-3.2-local', 'ollama:model_name')
+        model_name: Model to use ('gemini-2.0-flash', 'ollama:model_name')
         prompt_template: Custom prompt template with {presentations} placeholder
         api_key: API key for Gemini if using that model
     Returns:
@@ -1766,10 +1417,6 @@ def generate_session_titles_and_keywords(
     if model_name.startswith("gemini"):
         return generate_session_titles_and_keywords_gemini(
             df_sessions, df_presentations, topic_column, prompt_template, api_key, model_name=model_name
-        )
-    elif model_name == "llama-3.2-local":
-        return generate_session_titles_and_keywords_llama_local(
-            df_sessions, df_presentations, topic_column, prompt_template
         )
     elif model_name.startswith("ollama:"):
         # Extract model name after 'ollama:'
@@ -1816,7 +1463,7 @@ def find_most_similar_committees_by_presentations(
             continue
         try:
             # Vectorized operations
-            session_embeddings = df_presentation_embeddings.iloc[
+            session_embeddings = df_presentation_embeddings.loc[
                 presentation_indices
             ].values
             session_avg_embedding = session_embeddings.mean(axis=0)
@@ -1972,3 +1619,115 @@ def load_hybrid_sessions(file_path, Session_column='Session', Title_column='Titl
     
     return df_presentations, df_sessions, session_column, title_column, abstract_column, abstract_id_column, topic_column
 
+def add_hybrid_presentations_to_df(df, df_hybrid_presentations, df_sessions, session_column_name='Session Code', 
+                                  hybrid_columns_to_map=None, df_columns_to_map=None):
+    """
+    Add hybrid presentations to the main dataframe with proper column mapping and session codes.
+    
+    Parameters:
+    - df: Main presentations dataframe
+    - df_hybrid_presentations: Hybrid presentations dataframe
+    - df_sessions: Sessions dataframe with cluster_id and hybrid_invited_presentations
+    - session_column_name: Name of the session column in df
+    - hybrid_columns_to_map: List of column names from df_hybrid_presentations to map (excluding cluster_id)
+    - df_columns_to_map: List of corresponding column names in df (same order as hybrid_columns_to_map)
+    
+    Returns:
+    - Tuple: (Combined dataframe with hybrid presentations added, Updated df_sessions)
+    """
+    
+    # Create copies to avoid modifying the originals
+    df_combined = df.copy()
+    df_sessions_updated = df_sessions.copy()
+    
+    # Get column mappings (exclude cluster_id as it's not needed)
+    df_columns = set(df.columns)
+    hybrid_columns = set(df_hybrid_presentations.columns) - {'cluster_id'}  # Exclude cluster_id
+    
+    # Create mapping for columns
+    column_mapping = {}
+    
+    if hybrid_columns_to_map is not None and df_columns_to_map is not None:
+        # Manual mapping provided
+        if len(hybrid_columns_to_map) != len(df_columns_to_map):
+            raise ValueError("hybrid_columns_to_map and df_columns_to_map must have the same length")
+        
+        for hybrid_col, df_col in zip(hybrid_columns_to_map, df_columns_to_map):
+            if hybrid_col in hybrid_columns and df_col in df_columns:
+                column_mapping[hybrid_col] = df_col
+            else:
+                if hybrid_col not in hybrid_columns:
+                    print(f"Warning: '{hybrid_col}' not found in df_hybrid_presentations columns")
+                if df_col not in df_columns:
+                    print(f"Warning: '{df_col}' not found in df columns")
+    else:
+        # Automatic mapping (original logic)
+        # Map hybrid columns to df columns
+        for hybrid_col in hybrid_columns:
+            if hybrid_col in df_columns:
+                column_mapping[hybrid_col] = hybrid_col
+            else:
+                # Try to find a matching column in df (case-insensitive or similar)
+                for df_col in df_columns:
+                    if hybrid_col.lower().replace('_', ' ') == df_col.lower().replace('_', ' '):
+                        column_mapping[hybrid_col] = df_col
+                        break
+    
+    print(f"Column mapping: {column_mapping}")
+    
+    # Track the current max index to know where new indices start
+    current_max_index = df_combined.index.max()
+    next_index = current_max_index + 1
+    
+    # Process each session that has hybrid presentations
+    for session_idx, session_row in df_sessions_updated.iterrows():
+        cluster_id = session_row[COLUMNS['CLUSTER_ID']]
+        hybrid_indices = session_row[COLUMNS['HYBRID_INVITED_PRESENTATIONS']]
+        
+        if len(hybrid_indices) > 0:
+            # Get hybrid presentations for this session
+            hybrid_pres_for_session = df_hybrid_presentations.loc[hybrid_indices].copy()
+            
+            # Map columns and add session code
+            mapped_hybrid_pres = pd.DataFrame()  # Don't preserve original index
+            
+            # Map existing columns
+            for hybrid_col, df_col in column_mapping.items():
+                if hybrid_col in hybrid_pres_for_session.columns:
+                    mapped_hybrid_pres[df_col] = hybrid_pres_for_session[hybrid_col].values  # Use .values to avoid index issues
+            
+            # Add session code (cluster_id from df_sessions)
+            mapped_hybrid_pres[session_column_name] = cluster_id
+            
+            # Add any missing columns from df with NaN values
+            for col in df.columns:
+                if col not in mapped_hybrid_pres.columns:
+                    mapped_hybrid_pres[col] = pd.NA
+            
+            # Reorder columns to match df
+            mapped_hybrid_pres = mapped_hybrid_pres.reindex(columns=df.columns)
+            
+            # Assign specific indices to the new hybrid presentations
+            num_hybrid_pres = len(hybrid_pres_for_session)
+            new_indices = list(range(next_index, next_index + num_hybrid_pres))
+            mapped_hybrid_pres.index = new_indices
+            
+            # Append to combined dataframe
+            df_combined = pd.concat([df_combined, mapped_hybrid_pres])
+            
+            # Update df_sessions to include the new indices in gen_presentation_indices
+            # FIX: Use .at instead of .loc for setting list values
+            current_gen_indices = df_sessions_updated.at[session_idx, COLUMNS['GEN_PRESENTATION_INDICES']]
+            updated_gen_indices = current_gen_indices + new_indices
+            df_sessions_updated.at[session_idx, COLUMNS['GEN_PRESENTATION_INDICES']] = updated_gen_indices
+            
+            # Update the session size
+            df_sessions_updated.at[session_idx, COLUMNS['SESSION_SIZE']] = len(updated_gen_indices)
+            
+            print(f"Added {len(hybrid_indices)} hybrid presentations to session {cluster_id}")
+            print(f"New indices: {new_indices}")
+            
+            # Update next_index for the next session
+            next_index += num_hybrid_pres
+    
+    return df_combined, df_sessions_updated
