@@ -191,11 +191,12 @@ with tab_pres:
         st.write(
             "The leftmost column is a checkbox column. Click to select a presentation. This may blend with the background on dark themes."
         )
-
+    st.write(f"Rows loaded: {len(df_presentations)}")
+    st.write(f"Rows with missing Abstract ID: {df_presentations['Abstract ID'].isna().sum()}")
     event = st.dataframe(
         df_presentations,
         use_container_width=True,
-        hide_index=True,
+        hide_index=False,
         column_config={
             "Abstract ID": st.column_config.NumberColumn(format="%i"),
             "Presentation Session Fit": st.column_config.NumberColumn(
@@ -232,7 +233,7 @@ with tab_pres:
         st.dataframe(
             similar_df,
             use_container_width=True,
-            hide_index=True,
+            hide_index=False,
             column_config={
                 "Abstract ID": st.column_config.NumberColumn(format="%i"),
                 "presentation_session_fit": None,
