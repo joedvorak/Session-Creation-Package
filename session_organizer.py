@@ -1135,64 +1135,51 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
     for idx, (session_key, session_value) in enumerate(sessions_dict.items(), 1):
         print(f"Processing session {session_key} ({idx}/{total_sessions})...")
         
-        # Format the prompt with presentations
-        prompt = prompt_template.format(presentations=str(session_value["Presentations"]))
-        
-        try:
-            # Make request to Ollama with extended context and schema
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": model_name,
-                    "prompt": prompt,
-                    "format": json_schema,  # Use JSON schema for structured output
-                    "stream": False,
-                    "options": {
-                        "num_ctx": 10000,  # Use extended context length
-                        "temperature": 0.7,
-                        "top_p": 0.9,
-                        "repeat_penalty": 1.1,
-                    }
-                },
-                timeout=120  # Longer timeout for extended context
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                text_answer = result["response"].strip()
+        for attempt in range(2):
+            try:
+                # Make request to Ollama with extended context and schema
+                response = requests.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": model_name,
+                        "prompt": prompt_template.format(presentations=str(session_value["Presentations"])),
+                        "format": json_schema,  # Use JSON schema for structured output
+                        "stream": False,
+                        "options": {
+                            "num_ctx": 10000,  # Use extended context length
+                            "temperature": 0.7,
+                            "top_p": 0.9,
+                            "repeat_penalty": 1.1,
+                        }
+                    },
+                    timeout=120  # Longer timeout for extended context
+                )
                 
-                try:
-                    # Parse JSON response
-                    answer_dict = json.loads(text_answer)
-                    
-                    # Store results with validation
-                    session_value[f"Ollama: {model_name} Title 1"] = answer_dict.get("title1", f"No Title Generated")
-                    session_value[f"Ollama: {model_name} Title 2"] = answer_dict.get("title2", f"No Title Generated")
-                    session_value[f"Ollama: {model_name} Title 3"] = answer_dict.get("title3", f"No Title Generated")
-                    session_value[f"Ollama: {model_name} Keywords"] = answer_dict.get("keywords", "No Keywords Generated")
-
-                    print(f"  ✓ Generated titles for session {session_key}")
-                    
-                except json.JSONDecodeError as e:
-                    print(f"  ✗ JSON parsing failed for session {session_key}: {e}")
-                    print(f"  Raw response: {text_answer[:1000]}...")
-                    
-                    # Set fallback values
-                    session_value[f"Ollama: {model_name} Title 1"] = f"No Title Generated"
-                    session_value[f"Ollama: {model_name} Title 2"] = f"No Title Generated"
-                    session_value[f"Ollama: {model_name} Title 3"] = f"No Title Generated"
-                    session_value[f"Ollama: {model_name} Keywords"] = "No Keywords Generated"
-
-            else:
-                raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
-                
-        except Exception as e:
-            print(f"  ✗ Error processing session {session_key}: {e}")
-            # Set fallback values
-            session_value[f"Ollama: {model_name} Title 1"] = f"No Title Generated"
-            session_value[f"Ollama: {model_name} Title 2"] = f"No Title Generated"
-            session_value[f"Ollama: {model_name} Title 3"] = f"No Title Generated"
-            session_value[f"Ollama: {model_name} Keywords"] = "No Keywords Generated"
+                if response.status_code == 200:
+                    result = response.json()
+                    text_answer = result["response"].strip()
+                    try:
+                        answer_dict = json.loads(text_answer)
+                        session_value[f"Ollama: {model_name} Title 1"] = answer_dict.get("title1", f"No Title Generated")
+                        session_value[f"Ollama: {model_name} Title 2"] = answer_dict.get("title2", f"No Title Generated")
+                        session_value[f"Ollama: {model_name} Title 3"] = answer_dict.get("title3", f"No Title Generated")
+                        session_value[f"Ollama: {model_name} Keywords"] = answer_dict.get("keywords", "No Keywords Generated")
+                        print(f"  ✓ Generated titles for session {session_key}")
+                        break  # success, exit retry loop
+                    except json.JSONDecodeError as e:
+                        raise Exception(f"JSON parsing failed: {e}. Raw response: {text_answer[:1000]}...")
+                else:
+                    raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+            except Exception as e:
+                if attempt == 0:
+                    print(f"  ✗ Error processing session {session_key} (attempt 1): {e}. Retrying once...")
+                    time.sleep(1)
+                    continue
+                print(f"  ✗ Error processing session {session_key} (attempt 2): {e}")
+                session_value[f"Ollama: {model_name} Title 1"] = f"No Title Generated"
+                session_value[f"Ollama: {model_name} Title 2"] = f"No Title Generated"
+                session_value[f"Ollama: {model_name} Title 3"] = f"No Title Generated"
+                session_value[f"Ollama: {model_name} Keywords"] = "No Keywords Generated"
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -1211,21 +1198,31 @@ def generate_session_titles_and_keywords_ollama(df_sessions, df_presentations, t
     for _, row in df_sessions_with_titles.iterrows():
         session_id = row[COLUMNS['CLUSTER_ID']]
         if session_id in sessions_dict:
-            title_1_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Title 1", "No Title Generated"))
-            title_2_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Title 2", "No Title Generated"))
-            title_3_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Title 3", "No Title Generated"))
-            keywords_list.append(sessions_dict[session_id].get(f"Ollama: {model_name} Keywords", "No Keywords Generated"))
+            title_1_list.append(
+                sessions_dict[session_id].get("Ollama: {model_name} Title 1", "No Title Generated")
+            )
+            title_2_list.append(
+                sessions_dict[session_id].get("Ollama: {model_name} Title 2", "No Title Generated")
+            )
+            title_3_list.append(
+                sessions_dict[session_id].get("Ollama: {model_name} Title 3", "No Title Generated")
+            )
+            keywords_list.append(
+                sessions_dict[session_id].get(
+                    "Ollama: {model_name} Keywords", "No Keywords Generated"
+                )
+            )
         else:
             title_1_list.append("No Title Generated")
             title_2_list.append("No Title Generated")
             title_3_list.append("No Title Generated")
             keywords_list.append("No Keywords Generated")
     
-    # Add new columns to DataFrame
-    df_sessions_with_titles[f"Ollama: {model_name} Title 1"] = title_1_list
-    df_sessions_with_titles[f"Ollama: {model_name} Title 2"] = title_2_list
-    df_sessions_with_titles[f"Ollama: {model_name} Title 3"] = title_3_list
-    df_sessions_with_titles[f"Ollama: {model_name} Keywords"] = keywords_list
+    # Add the new columns to the DataFrame
+    df_sessions_with_titles["Ollama: {model_name} Title 1"] = title_1_list
+    df_sessions_with_titles["Ollama: {model_name} Title 2"] = title_2_list
+    df_sessions_with_titles["Ollama: {model_name} Title 3"] = title_3_list
+    df_sessions_with_titles["Ollama: {model_name} Keywords"] = keywords_list
 
     return df_sessions_with_titles
 
@@ -1308,44 +1305,40 @@ def generate_session_titles_and_keywords_gemini(
     # Generate titles and keywords for each session
     for idx, (session_key, session_value) in enumerate(sessions_dict.items(), 1):
         print(f"Processing session {session_key} ({idx}/{total_sessions})...")
-
-        try:
-            # Format the prompt with the presentations
-            formatted_prompt = prompt_template.format(
-                presentations=str(session_value["Presentations"])
-            )
-
-            response = client.models.generate_content(
-                model=model_name,
-                contents=formatted_prompt,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": Session_info,
-                },
-            )
-
-            # Parse the response
-            my_sessions: Session_info = response.parsed
-            print(f"  ✓ Generated titles for session {session_key}")
-
-            # Store results in sessions_dict
-            session_value["Gemini Title 1"] = my_sessions.title_1
-            session_value["Gemini Title 2"] = my_sessions.title_2
-            session_value["Gemini Title 3"] = my_sessions.title_3
-            session_value["Gemini Keywords"] = my_sessions.keywords
-
-            # Add small delay to avoid rate limiting
-            time.sleep(1)
-
-        except Exception as e:
-            print(f"  ✗ Error processing session {session_key}: {e}")
-            # Set default values in case of error
-            session_value["Gemini Title 1"] = f"No Title Generated"
-            session_value["Gemini Title 2"] = f"No Title Generated"
-            session_value["Gemini Title 3"] = f"No Title Generated"
-            session_value["Gemini Keywords"] = (
-                "No Keywords Generated"
-            )
+        for attempt in range(2):
+            try:
+                # Format the prompt with the presentations
+                formatted_prompt = prompt_template.format(
+                    presentations=str(session_value["Presentations"])
+                )
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=formatted_prompt,
+                    config={
+                        "response_mime_type": "application/json",
+                        "response_schema": Session_info,
+                    },
+                )
+                my_sessions: Session_info = response.parsed
+                print(f"  ✓ Generated titles for session {session_key}")
+                session_value["Gemini Title 1"] = my_sessions.title_1
+                session_value["Gemini Title 2"] = my_sessions.title_2
+                session_value["Gemini Title 3"] = my_sessions.title_3
+                session_value["Gemini Keywords"] = my_sessions.keywords
+                time.sleep(1)
+                break  # success, exit retry loop
+            except Exception as e:
+                if attempt == 0:
+                    print(f"  ✗ Error processing session {session_key} (attempt 1): {e}. Retrying once...")
+                    time.sleep(1)
+                    continue
+                print(f"  ✗ Error processing session {session_key} (attempt 2): {e}")
+                session_value["Gemini Title 1"] = f"No Title Generated"
+                session_value["Gemini Title 2"] = f"No Title Generated"
+                session_value["Gemini Title 3"] = f"No Title Generated"
+                session_value["Gemini Keywords"] = (
+                    "No Keywords Generated"
+                )
 
     end_time = time.time()
     gemini_elapsed_time = end_time - start_time
@@ -1561,7 +1554,7 @@ def load_hybrid_sessions(file_path, Session_column='Session', Title_column='Titl
         raise ValueError(f"Unsupported file format. Please use CSV (.csv) or Excel (.xlsx, .xls) files.")
     
     # Validate required columns exist in the file
-    required_columns = [Session_column, Title_column, Abstract_column, Abstract_ID_column]
+    required_columns = [Session_column, Title_column]
     missing_columns = [col for col in required_columns if col not in df.columns]
     
     if missing_columns:
@@ -1580,7 +1573,9 @@ def load_hybrid_sessions(file_path, Session_column='Session', Title_column='Titl
     df_presentations = df.rename(columns=column_rename_map)
     
     # Clean up any NaN values in critical columns
-    df_presentations = df_presentations.dropna(subset=[session_column, title_column, abstract_column])
+    df_presentations = df_presentations.dropna(subset=[session_column, title_column,])
+    # Abstract can be optional, so we fill NaN with empty strings
+    df_presentations[[title_column, abstract_column]] = df_presentations[[title_column, abstract_column]].fillna('').astype(str)
     
     # Create combined topic column (like load_presentations)
     df_presentations[topic_column] = df_presentations[[title_column, abstract_column]].agg(': '.join, axis=1)
