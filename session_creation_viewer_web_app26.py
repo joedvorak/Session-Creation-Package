@@ -22,7 +22,7 @@ This tool allows you to explore the similarity between presentations and session
 You can view presentations, sessions, and how similar they are to each other based on their content.
 Similarity is based on the title and abstract of each presentation, using [Google's Gemini Embedding Model](https://ai.google.dev/gemini-api/docs/models#gemini-embedding) to calculate cosine similarity scores.
 
-**Note:** The abstracts are encrypted for security. You must enter the correct password to view them. 
+**Note:** Some presentation information is encrypted for security. You must enter the correct password to view this data. 
 The password is provided by the ASABE AIM 2026 organizers. If you do not have it, please contact them.
 """)
 
