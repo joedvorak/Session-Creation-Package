@@ -1,10 +1,10 @@
-# Automated Technical Session Creation Package
+# SMART - Session Matching And Automated Recommendation Tool
 
-This repository contains a comprehensive suite of tools for automatically creating and organizing technical sessions for academic conferences using AI-powered similarity analysis. The system uses machine learning embeddings to group presentations by topic similarity, supports hybrid sessions with pre-assigned invited speakers, and provides interactive tools for session analysis and visualization.
+A comprehensive suite of tools for automatically creating and organizing technical sessions for academic conferences using AI-powered similarity analysis. The system uses machine learning embeddings to group presentations by topic similarity, supports hybrid sessions with pre-assigned invited speakers, and provides interactive tools for session analysis and visualization.
 
 ## 🚀 Overview
 
-The Session Creation Package automates the traditionally manual process of organizing conference presentations into thematic sessions. It leverages state-of-the-art sentence transformer models to:
+The SMART system automates the traditionally manual process of organizing conference presentations into thematic sessions. It leverages state-of-the-art embedding models to:
 
 - **Generate semantic embeddings** from presentation titles and abstracts
 - **Cluster presentations** into coherent thematic sessions
@@ -16,7 +16,39 @@ The Session Creation Package automates the traditionally manual process of organ
 
 ## 📁 Repository Structure
 
-### Core Programs
+### SMART v2.0 (New Modular Package)
+
+The `smart/` package provides a clean, modular architecture separating concerns:
+
+```
+smart/
+├── __init__.py          # Package root, exports main classes
+├── core/
+│   ├── database.py      # SQLite-based persistence (EmbeddingCache, ConferenceDB)
+│   ├── placement.py     # Session assignment algorithms
+│   └── metrics.py       # Session quality evaluation
+├── io/
+│   ├── loaders.py       # Flexible file loading with column mapping
+│   └── exporters.py     # Configurable export with redaction profiles
+└── llm/
+    ├── embeddings.py    # Embedding backends (Gemini, Ollama, SentenceTransformers)
+    └── titles.py        # LLM-based title/keyword generation
+```
+
+#### Key v2.0 Features:
+
+- **SQLite-based caching**: Embeddings are cached by text hash + model configuration, preventing re-computation when text hasn't changed
+- **Multiple embedding backends**: Gemini, Ollama (local), and SentenceTransformers
+- **Configurable exports**: Profiles for cloud viewer (redacted PII), organizers (full data), room assignment, presenter lists
+- **Temporary ID handling**: `TEMP-YY-XXXXX` format for presentations without submission IDs
+- **Model version tracking**: Cache properly handles model version changes
+
+#### New Applications:
+
+- **`smart_app.py`**: Streamlit-based wizard for local processing (6 steps: Conference Setup → Import → Embed → Place → Titles → Export)
+- **`migrate_data.py`**: Scripts to import existing parquet/CSV data into the new SQLite schema
+
+### Legacy Tools (v1.x)
 
 #### 🔧 `session_organizer.py`
 The main algorithmic engine containing all core functionality:

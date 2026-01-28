@@ -29,6 +29,11 @@ __pycache__/
 #*.parquet
 *.pkl
 #*.crypt
+*.db
+
+# Output files
+output/
+exports/
 
 # Presentation Data
 df_presentations.pkl
