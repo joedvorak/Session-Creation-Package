@@ -75,6 +75,8 @@ def init_session_state():
         "sessions_created": False,
         "file_inspection": None,
         "column_mapping": None,
+        "import_notification": None,  # For displaying import success messages
+        "import_tab": "📄 Regular Presentations",  # Track selected import tab
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -112,15 +114,39 @@ def step_conference_setup():
             help="Directory for database files"
         )
         
+        # Optional: reuse existing embedding cache
+        existing_cache_file = st.file_uploader(
+            "Reuse existing cache (optional)",
+            type=["db"],
+            key="existing_cache_upload",
+            help="Upload a cache from a previous conference to skip re-computing embeddings. Will be copied to your working directory."
+        )
+        
         if st.button("Create Conference", type="primary"):
             working_path = Path(working_dir)
             working_path.mkdir(parents=True, exist_ok=True)
             
-            # Create databases
+            # Determine cache path
             cache_path = working_path / f"{conference_name}_cache.db"
             working_path_db = working_path / f"{conference_name}_working.db"
             
+            # Handle existing cache (copy to working directory if provided)
+            cache_copied = False
+            cache_stats = None
+            
+            if existing_cache_file is not None:
+                # Save uploaded file to working directory
+                with open(cache_path, "wb") as f:
+                    f.write(existing_cache_file.getvalue())
+                cache_copied = True
+            
+            # Create cache (opens existing if we copied one, otherwise creates new)
             st.session_state.embedding_cache = EmbeddingCache(cache_path)
+            
+            # Show cache stats if we copied one
+            if cache_copied:
+                cache_stats = st.session_state.embedding_cache.get_stats()
+            
             st.session_state.conference_db = ConferenceDB(
                 working_path_db, conference_year=conference_year
             )
@@ -140,6 +166,8 @@ def step_conference_setup():
             save_config(config)
             
             st.success(f"Created conference: {conference_name}")
+            if cache_copied and cache_stats:
+                st.info(f"📦 Loaded existing cache with {cache_stats.get('total_embeddings', 0):,} embeddings")
             st.session_state.current_step = 1
             st.rerun()
     
@@ -168,17 +196,59 @@ def step_conference_setup():
         
         st.divider()
         
-        # Manual file selection
-        cache_file = st.file_uploader(
-            "Or select cache database (.db)",
+        # Manual file selection for conferences not in recent list
+        st.write("**Open from files:**")
+        st.caption("For conferences not in the list above")
+        
+        manual_cache_file = st.file_uploader(
+            "Cache database (.db)",
             type=["db"],
             key="cache_upload"
         )
-        working_file = st.file_uploader(
-            "And working database (.db)",
+        manual_working_file = st.file_uploader(
+            "Working database (.db)",
             type=["db"],
             key="working_upload"
         )
+        
+        # Handler for manual uploads
+        if manual_cache_file is not None and manual_working_file is not None:
+            if st.button("Open Conference", type="primary", key="open_from_files"):
+                import tempfile
+                
+                # Save to temp directory
+                temp_dir = Path(tempfile.gettempdir()) / "smart_uploads"
+                temp_dir.mkdir(exist_ok=True)
+                
+                cache_path = temp_dir / manual_cache_file.name
+                working_path = temp_dir / manual_working_file.name
+                
+                with open(cache_path, "wb") as f:
+                    f.write(manual_cache_file.getvalue())
+                with open(working_path, "wb") as f:
+                    f.write(manual_working_file.getvalue())
+                
+                # Try to extract year from working DB or default to current
+                try:
+                    temp_db = ConferenceDB(working_path)
+                    year = temp_db.conference_year
+                except:
+                    year = datetime.now().year % 100
+                
+                st.session_state.embedding_cache = EmbeddingCache(cache_path)
+                st.session_state.conference_db = ConferenceDB(working_path, conference_year=year)
+                
+                # Get stats
+                cache_stats = st.session_state.embedding_cache.get_stats()
+                db_stats = st.session_state.conference_db.get_stats()
+                
+                st.success(f"Opened conference!")
+                st.info(f"📦 Cache: {cache_stats.get('total_embeddings', 0):,} embeddings | "
+                       f"📋 DB: {db_stats['total_presentations']} presentations, {db_stats['total_sessions']} sessions")
+                st.session_state.current_step = 1
+                st.rerun()
+        elif manual_cache_file is not None or manual_working_file is not None:
+            st.warning("Upload both files to open a conference")
 
 
 def step_import_data():
@@ -189,9 +259,20 @@ def step_import_data():
         st.warning("Please create or open a conference first")
         return
     
+    # Display any pending import notification (persists across rerun)
+    if st.session_state.import_notification:
+        notif = st.session_state.import_notification
+        if notif["type"] == "success":
+            st.success(notif["message"])
+        elif notif["type"] == "info":
+            st.info(notif["message"])
+        # Clear after displaying
+        st.session_state.import_notification = None
+    
     # Show current stats
     stats = st.session_state.conference_db.get_stats()
-    st.info(f"Current: {stats['total_presentations']} presentations, {stats['total_sessions']} sessions")
+    committee_count = len(st.session_state.conference_db.get_committees()) if hasattr(st.session_state.conference_db, 'get_committees') else 0
+    st.info(f"Current: {stats['total_presentations']} presentations, {stats['total_sessions']} sessions, {committee_count} committees")
     
     # Option to clear existing presentations for reload
     if stats['total_presentations'] > 0:
@@ -212,9 +293,21 @@ def step_import_data():
                     st.success(f"Cleared {count} presentations and all sessions.")
                     st.rerun()
     
-    tab1, tab2, tab3 = st.tabs(["📄 Regular Presentations", "⭐ Hybrid Sessions", "🏛️ Committees"])
+    # Use radio buttons instead of tabs to prevent jumping on file upload
+    import_options = ["📄 Regular Presentations", "⭐ Hybrid Sessions", "🏛️ Committees"]
+    selected_tab = st.radio(
+        "Import type",
+        import_options,
+        index=import_options.index(st.session_state.import_tab),
+        horizontal=True,
+        key="import_tab_radio",
+        label_visibility="collapsed"
+    )
+    st.session_state.import_tab = selected_tab
     
-    with tab1:
+    st.divider()
+    
+    if selected_tab == "📄 Regular Presentations":
         uploaded_file = st.file_uploader(
             "Upload presentations file (CSV or Excel)",
             type=["csv", "xlsx", "xls"],
@@ -314,7 +407,10 @@ def step_import_data():
                         presentations = df.to_dict('records')
                         ids = st.session_state.conference_db.import_presentations_batch(presentations)
                         
-                        st.success(f"✓ Imported {len(ids)} presentations ({metadata['temp_id_count']} with temp IDs)")
+                        st.session_state.import_notification = {
+                            "type": "success",
+                            "message": f"✅ Imported {len(ids)} presentations ({metadata['temp_id_count']} with temp IDs)"
+                        }
                         st.session_state.presentations_df = df
                         st.rerun()
                 except Exception as e:
@@ -322,7 +418,7 @@ def step_import_data():
                     import traceback
                     st.code(traceback.format_exc())
     
-    with tab2:
+    elif selected_tab == "⭐ Hybrid Sessions":
         st.write("Import pre-assigned hybrid sessions with invited presentations")
         st.caption("Hybrid sessions are pre-organized sessions (e.g., invited talks, special sessions) where presentations are already assigned to specific sessions.")
         
@@ -427,10 +523,13 @@ def step_import_data():
                                 )
                             
                             # Show success with multi-slot info if applicable
-                            msg = f"✓ Imported {metadata['total_presentation_slots']} presentation slots in {len(df_sessions)} hybrid sessions"
+                            msg = f"✅ Imported {metadata['total_presentation_slots']} presentation slots in {len(df_sessions)} hybrid sessions"
                             if metadata.get("multi_slot_presentations", 0) > 0:
-                                msg += f"\n  ({metadata['unique_presentations']} unique presentations, {metadata['multi_slot_presentations']} spanning multiple slots)"
-                            st.success(msg)
+                                msg += f" ({metadata['unique_presentations']} unique presentations, {metadata['multi_slot_presentations']} spanning multiple slots)"
+                            st.session_state.import_notification = {
+                                "type": "success",
+                                "message": msg
+                            }
                             st.rerun()
                     except Exception as e:
                         st.error(f"Error importing hybrid sessions: {e}")
@@ -439,7 +538,7 @@ def step_import_data():
             except Exception as e:
                 st.error(f"Error reading file: {e}")
     
-    with tab3:
+    elif selected_tab == "🏛️ Committees":
         st.write("Import committee data for session assignment")
         st.caption("Committees can be matched to sessions based on topic similarity. Each committee needs a name and description.")
         
@@ -495,7 +594,10 @@ def step_import_data():
                             committees_data = df_committees.to_dict('records')
                             imported_ids = st.session_state.conference_db.import_committees_batch(committees_data)
                             
-                            st.success(f"✓ Imported {len(imported_ids)} committees")
+                            st.session_state.import_notification = {
+                                "type": "success",
+                                "message": f"✅ Imported {len(imported_ids)} committees"
+                            }
                             st.rerun()
                     except Exception as e:
                         st.error(f"Error importing committees: {e}")
@@ -1180,7 +1282,6 @@ def step_generate_titles():
         )
     
     sessions = st.session_state.conference_db.get_sessions()
-    presentations = st.session_state.conference_db.get_presentations()
     
     st.info(f"{len(sessions)} sessions to process")
     
@@ -1206,10 +1307,13 @@ def step_generate_titles():
             )
             
             progress_bar = st.progress(0)
+            generated_count = 0
             
             for i, session in enumerate(sessions):
-                session_pres = [p for p in presentations 
-                              if p.get("session_id") == session["session_id"]]
+                # Get presentations for this session (uses placements table)
+                session_pres = st.session_state.conference_db.get_presentations(
+                    session_id=session["session_id"]
+                )
                 
                 if session_pres:
                     pres_data = [
@@ -1225,10 +1329,14 @@ def step_generate_titles():
                     )
                     
                     st.write(f"**{session['session_id']}**: {result.titles[0] if result.titles else 'No title'}")
+                    generated_count += 1
                 
                 progress_bar.progress((i + 1) / len(sessions))
             
-            st.success("Titles generated!")
+            if generated_count > 0:
+                st.success(f"Generated titles for {generated_count} sessions!")
+            else:
+                st.warning("No sessions with presentations found. Make sure presentations are assigned to sessions.")
             
             config["default_title_model"] = model
             save_config(config)

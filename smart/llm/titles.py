@@ -125,7 +125,7 @@ class GeminiTitleGenerator(TitleGenerator):
     Title generator using Google Gemini API.
     """
     
-    DEFAULT_MODEL = "gemini-2.0-flash"
+    DEFAULT_MODEL = "gemini-2.5-flash-lite"
     
     def __init__(
         self,
