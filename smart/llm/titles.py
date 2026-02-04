@@ -22,6 +22,68 @@ class TitleGenerationResult:
     raw_response: Optional[str] = None
 
 
+def get_ollama_models(
+    host: str = "http://localhost:11434",
+    timeout: float = 10.0,
+    filter_generation: bool = False
+) -> List[str]:
+    """
+    Discover available models from Ollama server.
+    
+    Args:
+        host: Ollama server URL
+        timeout: Request timeout in seconds
+        filter_generation: If True, exclude known embedding-only models
+        
+    Returns:
+        List of model names, or empty list if Ollama unavailable
+    """
+    import requests
+    
+    try:
+        response = requests.get(
+            f"{host.rstrip('/')}/api/tags",
+            timeout=timeout
+        )
+        if response.status_code == 200:
+            data = response.json()
+            models = [m["name"] for m in data.get("models", [])]
+            
+            if filter_generation:
+                # Exclude embedding-only models from generation list
+                embedding_only_keywords = ["embed", "nomic-embed", "mxbai-embed", "bge-"]
+                filtered = [
+                    m for m in models 
+                    if not any(kw in m.lower() for kw in embedding_only_keywords)
+                ]
+                return filtered if filtered else models
+            
+            return models
+    except Exception:
+        pass
+    return []
+
+
+def check_ollama_connection(host: str = "http://localhost:11434", timeout: float = 5.0) -> bool:
+    """
+    Check if Ollama server is reachable.
+    
+    Args:
+        host: Ollama server URL
+        timeout: Request timeout in seconds
+        
+    Returns:
+        True if Ollama is reachable, False otherwise
+    """
+    import requests
+    
+    try:
+        response = requests.get(f"{host.rstrip('/')}/api/tags", timeout=timeout)
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
 DEFAULT_PROMPT_TEMPLATE = """I am organizing oral research presentation sessions for the American Society of Agricultural and Biological Engineers Annual International Meeting. Please provide 3 options for the name/title of a session. Also provide 5 keywords describing the session. The name and keywords should highlight the commonality among all presentations. The target audience for titles and keywords is engineering designers and researchers. The title should be descriptive of the content and be interesting and engaging. It should be less than 100 characters long.
 
 Please respond in JSON format:
@@ -229,7 +291,7 @@ class OllamaTitleGenerator(TitleGenerator):
     Title generator using local Ollama server.
     """
     
-    DEFAULT_MODEL = "llama3.2:3b"
+    DEFAULT_MODEL = "llama3.2"
     DEFAULT_HOST = "http://localhost:11434"
     
     def __init__(

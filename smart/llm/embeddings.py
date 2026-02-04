@@ -16,6 +16,72 @@ from dataclasses import dataclass
 from smart.core.database import EmbeddingCache, EmbeddingConfig
 
 
+def get_ollama_models(
+    host: str = "http://localhost:11434",
+    timeout: float = 10.0,
+    filter_embedding: bool = False
+) -> List[str]:
+    """
+    Discover available models from Ollama server.
+    
+    Args:
+        host: Ollama server URL
+        timeout: Request timeout in seconds
+        filter_embedding: If True, only return models known to support embeddings
+        
+    Returns:
+        List of model names, or empty list if Ollama unavailable
+    """
+    import requests
+    
+    try:
+        response = requests.get(
+            f"{host.rstrip('/')}/api/tags",
+            timeout=timeout
+        )
+        if response.status_code == 200:
+            data = response.json()
+            models = [m["name"] for m in data.get("models", [])]
+            
+            if filter_embedding:
+                # Known embedding models - filter to only these if present
+                # This list can be expanded as new embedding models become available
+                embedding_keywords = [
+                    "embed", "nomic", "mxbai", "bge", "e5", "gte", "instructor"
+                ]
+                filtered = [
+                    m for m in models 
+                    if any(kw in m.lower() for kw in embedding_keywords)
+                ]
+                # Return filtered if any matches, otherwise return all (user may have renamed)
+                return filtered if filtered else models
+            
+            return models
+    except Exception:
+        pass
+    return []
+
+
+def check_ollama_connection(host: str = "http://localhost:11434", timeout: float = 5.0) -> bool:
+    """
+    Check if Ollama server is reachable.
+    
+    Args:
+        host: Ollama server URL
+        timeout: Request timeout in seconds
+        
+    Returns:
+        True if Ollama is reachable, False otherwise
+    """
+    import requests
+    
+    try:
+        response = requests.get(f"{host.rstrip('/')}/api/tags", timeout=timeout)
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
 class EmbeddingBackend(ABC):
     """
     Abstract base class for embedding backends.
@@ -101,15 +167,37 @@ class CachedEmbedder:
     def config(self) -> EmbeddingConfig:
         return self._config
     
-    def embed(self, text: str) -> np.ndarray:
+    @property
+    def truncation_count(self) -> int:
+        """Get truncation count from backend if supported."""
+        if hasattr(self.backend, 'truncation_count'):
+            return self.backend.truncation_count
+        return 0
+    
+    @property
+    def truncated_ids(self) -> List[str]:
+        """Get truncated IDs from backend if supported."""
+        if hasattr(self.backend, 'truncated_ids'):
+            return self.backend.truncated_ids
+        return []
+    
+    def reset_truncation_stats(self):
+        """Reset truncation stats on backend if supported."""
+        if hasattr(self.backend, 'reset_truncation_stats'):
+            self.backend.reset_truncation_stats()
+    
+    def embed(self, text: str, text_id: Optional[str] = None) -> np.ndarray:
         """Get embedding, using cache if available."""
         # Check cache first
         cached = self.cache.get_embedding(text, self._config)
         if cached is not None:
             return cached
         
-        # Generate new embedding
-        embedding = self.backend.embed(text)
+        # Generate new embedding (pass text_id if backend supports it)
+        if hasattr(self.backend, 'embed') and 'text_id' in self.backend.embed.__code__.co_varnames:
+            embedding = self.backend.embed(text, text_id=text_id)
+        else:
+            embedding = self.backend.embed(text)
         
         # Store in cache
         self.cache.store_embedding(text, embedding, self._config)
@@ -119,6 +207,7 @@ class CachedEmbedder:
     def embed_batch(
         self,
         texts: List[str],
+        text_ids: Optional[List[str]] = None,
         show_progress: bool = False
     ) -> List[np.ndarray]:
         """
@@ -126,6 +215,7 @@ class CachedEmbedder:
         
         Args:
             texts: List of texts to embed
+            text_ids: Optional list of identifiers for tracking truncation
             show_progress: Whether to print progress
             
         Returns:
@@ -134,8 +224,16 @@ class CachedEmbedder:
         # Check cache for all texts
         cached = self.cache.get_embeddings_batch(texts, self._config)
         
-        # Identify which need embedding
-        to_embed = [t for t in texts if cached[t] is None]
+        # Identify which need embedding (keep track of indices for text_ids)
+        to_embed = []
+        to_embed_ids = []
+        for i, t in enumerate(texts):
+            if cached[t] is None:
+                to_embed.append(t)
+                if text_ids:
+                    to_embed_ids.append(text_ids[i])
+                else:
+                    to_embed_ids.append(None)
         
         if show_progress:
             print(f"Found {len(texts) - len(to_embed)}/{len(texts)} embeddings in cache")
@@ -144,8 +242,15 @@ class CachedEmbedder:
             if show_progress:
                 print(f"Generating {len(to_embed)} new embeddings...")
             
-            # Generate new embeddings
-            new_embeddings = self.backend.embed_batch(to_embed)
+            # Generate new embeddings (pass text_ids if backend supports it)
+            if hasattr(self.backend, 'embed_batch'):
+                try:
+                    new_embeddings = self.backend.embed_batch(to_embed, text_ids=to_embed_ids)
+                except TypeError:
+                    # Backend doesn't support text_ids parameter
+                    new_embeddings = self.backend.embed_batch(to_embed)
+            else:
+                new_embeddings = [self.backend.embed(t) for t in to_embed]
             
             # Store in cache
             self.cache.store_embeddings_batch(
@@ -162,7 +267,7 @@ class CachedEmbedder:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get combined stats from backend and cache."""
-        return {
+        stats = {
             "backend": {
                 "model_name": self.backend.model_name,
                 "model_version": self.backend.model_version,
@@ -170,6 +275,12 @@ class CachedEmbedder:
             },
             "cache": self.cache.get_stats()
         }
+        
+        # Add truncation stats if available
+        if hasattr(self.backend, 'truncation_count'):
+            stats["truncation_count"] = self.backend.truncation_count
+        
+        return stats
 
 
 class GeminiEmbedder(EmbeddingBackend):
@@ -285,16 +396,23 @@ class OllamaEmbedder(EmbeddingBackend):
     Usage:
         embedder = OllamaEmbedder(model="nomic-embed-text")
         embedding = embedder.embed("Hello world")
+    
+    Handles context length limits by automatically truncating text if needed.
+    Check `truncation_count` after embedding to see how many texts were truncated.
     """
     
-    DEFAULT_MODEL = "nomic-embed-text"
+    DEFAULT_MODEL = "nomic-embed-text-v2-moe"
     DEFAULT_HOST = "http://localhost:11434"
+    # Default context length estimate (characters) - conservative for most models
+    # Most embedding models support 512-8192 tokens; ~4 chars per token average
+    DEFAULT_MAX_CHARS = 8000
     
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
         host: str = DEFAULT_HOST,
-        timeout: float = 120.0
+        timeout: float = 120.0,
+        max_chars: Optional[int] = None
     ):
         """
         Initialize Ollama embedder.
@@ -303,11 +421,15 @@ class OllamaEmbedder(EmbeddingBackend):
             model: Ollama model name
             host: Ollama server URL
             timeout: Request timeout in seconds
+            max_chars: Maximum characters per text (auto-detected if None)
         """
         self._model = model
         self._host = host.rstrip("/")
         self._timeout = timeout
         self._model_version = None
+        self._max_chars = max_chars  # Will be auto-adjusted on context errors
+        self._truncation_count = 0
+        self._truncated_ids: List[str] = []  # Track which texts were truncated
     
     def _get_model_info(self) -> Dict[str, Any]:
         """Fetch model information from Ollama."""
@@ -337,30 +459,123 @@ class OllamaEmbedder(EmbeddingBackend):
             self._model_version = info.get("digest", self._model)[:16]
         return self._model_version
     
-    def embed(self, text: str) -> np.ndarray:
-        """Generate embedding for single text."""
+    @property
+    def truncation_count(self) -> int:
+        """Number of texts that were truncated due to context length limits."""
+        return self._truncation_count
+    
+    @property
+    def truncated_ids(self) -> List[str]:
+        """List of text identifiers that were truncated."""
+        return self._truncated_ids.copy()
+    
+    def reset_truncation_stats(self):
+        """Reset truncation tracking for a new batch."""
+        self._truncation_count = 0
+        self._truncated_ids = []
+    
+    def _truncate_text(self, text: str, max_chars: int) -> str:
+        """Truncate text to max_chars, trying to break at word boundary."""
+        if len(text) <= max_chars:
+            return text
+        
+        # Try to break at last space before limit
+        truncated = text[:max_chars]
+        last_space = truncated.rfind(' ')
+        if last_space > max_chars * 0.8:  # Only use space if it's not too far back
+            truncated = truncated[:last_space]
+        
+        return truncated
+    
+    def embed(self, text: str, text_id: Optional[str] = None) -> np.ndarray:
+        """
+        Generate embedding for single text.
+        
+        Args:
+            text: Text to embed
+            text_id: Optional identifier for tracking truncation (e.g., abstract_id)
+            
+        Returns:
+            Embedding vector as numpy array
+        """
         import requests
         
-        response = requests.post(
-            f"{self._host}/api/embeddings",
-            json={
-                "model": self._model,
-                "prompt": text
-            },
-            timeout=self._timeout
-        )
+        # Pre-truncate if we have a known limit
+        original_len = len(text)
+        if self._max_chars is not None and len(text) > self._max_chars:
+            text = self._truncate_text(text, self._max_chars)
+            self._truncation_count += 1
+            if text_id:
+                self._truncated_ids.append(text_id)
         
-        if response.status_code != 200:
+        max_retries = 3
+        current_text = text
+        
+        for attempt in range(max_retries):
+            response = requests.post(
+                f"{self._host}/api/embeddings",
+                json={
+                    "model": self._model,
+                    "prompt": current_text
+                },
+                timeout=self._timeout
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return np.array(data["embedding"], dtype=np.float32)
+            
+            # Check if it's a context length error
+            if response.status_code == 500:
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", "")
+                    if "context length" in error_msg.lower() or "input length" in error_msg.lower():
+                        # Reduce text length and retry
+                        new_max = int(len(current_text) * 0.7)  # Reduce by 30%
+                        if new_max < 100:
+                            raise RuntimeError(
+                                f"Text too short to truncate further. Original length: {original_len}"
+                            )
+                        
+                        current_text = self._truncate_text(text, new_max)
+                        
+                        # Update our learned max_chars for future texts
+                        if self._max_chars is None or new_max < self._max_chars:
+                            self._max_chars = new_max
+                        
+                        # Track truncation if not already counted
+                        if original_len == len(text):  # Wasn't pre-truncated
+                            self._truncation_count += 1
+                            if text_id and text_id not in self._truncated_ids:
+                                self._truncated_ids.append(text_id)
+                        
+                        continue  # Retry with shorter text
+                except (ValueError, KeyError):
+                    pass
+            
+            # Non-recoverable error
             raise RuntimeError(
                 f"Ollama embedding failed: {response.status_code} - {response.text}"
             )
         
-        data = response.json()
-        return np.array(data["embedding"], dtype=np.float32)
+        raise RuntimeError(
+            f"Failed to embed text after {max_retries} truncation attempts"
+        )
     
-    def embed_batch(self, texts: List[str]) -> List[np.ndarray]:
-        """Generate embeddings for multiple texts."""
-        return [self.embed(text) for text in texts]
+    def embed_batch(self, texts: List[str], text_ids: Optional[List[Optional[str]]] = None) -> List[np.ndarray]:
+        """
+        Generate embeddings for multiple texts.
+        
+        Args:
+            texts: List of texts to embed
+            text_ids: Optional list of identifiers for tracking truncation
+            
+        Returns:
+            List of embedding vectors
+        """
+        ids: List[Optional[str]] = text_ids if text_ids is not None else [None] * len(texts)
+        return [self.embed(text, text_id) for text, text_id in zip(texts, ids)]
 
 
 class SentenceTransformerEmbedder(EmbeddingBackend):

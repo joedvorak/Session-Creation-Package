@@ -81,7 +81,7 @@ PROFILE_ORGANIZER_FULL = ExportProfile(
     include_embeddings=True,
     include_similarities=True,
     include_history=True,
-    format=ExportFormat.SQLITE,
+    format=ExportFormat.PARQUET,
 )
 
 PROFILE_ROOM_ASSIGNMENT = ExportProfile(
@@ -209,7 +209,34 @@ def export_sessions(
     Export sessions according to profile.
     """
     sessions = conference_db.get_sessions()
-    df = pd.DataFrame(sessions)
+    
+    # Add committee matches to session data
+    sessions_with_committees = []
+    for session in sessions:
+        session_data = dict(session)
+        try:
+            matches = conference_db.get_session_committee_matches(session["session_id"])
+            if matches:
+                for i, match in enumerate(matches[:3], 1):
+                    session_data[f"committee_{i}"] = match["committee_name"]
+                    session_data[f"committee_{i}_score"] = round(match["similarity_score"], 3)
+        except Exception:
+            # Skip if committee matches not available
+            pass
+        sessions_with_committees.append(session_data)
+    
+    df = pd.DataFrame(sessions_with_committees)
+    
+    # Rename columns for viewer compatibility
+    column_renames = {
+        "coherence": "session_coherence",
+        "presentation_count": "session_size",
+        "distinctiveness": "session_distinctiveness",
+    }
+    for old_name, new_name in column_renames.items():
+        if old_name in df.columns and new_name not in df.columns:
+            df = df.rename(columns={old_name: new_name})
+    
     df = _apply_field_filters(df, profile)
     
     output_path = Path(output_path)
@@ -280,7 +307,7 @@ def export_for_viewer(
     Creates multiple files in output directory:
     - presentations.parquet
     - sessions.parquet
-    - presentation_similarities.parquet (if enabled)
+    - pres_similarities.parquet (if enabled)
     - session_similarities.parquet (if enabled)
     - metadata.json
     
@@ -322,11 +349,11 @@ def export_for_viewer(
     # Export similarity matrices if enabled
     if profile.include_similarities:
         # Presentation similarities
-        pres_sim_path = output_dir / "presentation_similarities.parquet"
+        pres_sim_path = output_dir / "pres_similarities.parquet"
         pres_sim_result = export_similarity_matrix(
             embeddings, abstract_ids, pres_sim_path
         )
-        results["files"]["presentation_similarities"] = pres_sim_result
+        results["files"]["pres_similarities"] = pres_sim_result
         
         # Session similarities
         sessions = conference_db.get_sessions()
@@ -460,7 +487,23 @@ def export_spreadsheet(
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         if include_sessions:
             sessions = conference_db.get_sessions()
-            df_sessions = pd.DataFrame(sessions)
+            
+            # Add committee matches to session data
+            sessions_with_committees = []
+            for session in sessions:
+                session_data = dict(session)
+                try:
+                    matches = conference_db.get_session_committee_matches(session["session_id"])
+                    if matches:
+                        for i, match in enumerate(matches[:3], 1):
+                            session_data[f"committee_{i}"] = match["committee_name"]
+                            session_data[f"committee_{i}_score"] = round(match["similarity_score"], 3)
+                except Exception:
+                    # Skip if committee matches not available
+                    pass
+                sessions_with_committees.append(session_data)
+            
+            df_sessions = pd.DataFrame(sessions_with_committees)
             df_sessions = _apply_field_filters(df_sessions, profile)
             df_sessions.to_excel(writer, sheet_name='Sessions', index=False)
             results["sheets"]["Sessions"] = {

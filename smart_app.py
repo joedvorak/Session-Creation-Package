@@ -77,6 +77,8 @@ def init_session_state():
         "column_mapping": None,
         "import_notification": None,  # For displaying import success messages
         "import_tab": "📄 Regular Presentations",  # Track selected import tab
+        "conference_name": None,  # Current conference name for display
+        "steps_completed": set(),  # Track which steps have been completed
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -168,6 +170,8 @@ def step_conference_setup():
             st.success(f"Created conference: {conference_name}")
             if cache_copied and cache_stats:
                 st.info(f"📦 Loaded existing cache with {cache_stats.get('total_embeddings', 0):,} embeddings")
+            st.session_state.conference_name = conference_name
+            st.session_state.steps_completed.add(0)  # Mark setup as complete
             st.session_state.current_step = 1
             st.rerun()
     
@@ -189,6 +193,8 @@ def step_conference_setup():
                 )
                 
                 st.success(f"Opened conference: {conf['name']}")
+                st.session_state.conference_name = conf['name']
+                st.session_state.steps_completed.add(0)  # Mark setup as complete
                 st.session_state.current_step = 1
                 st.rerun()
         else:
@@ -242,9 +248,13 @@ def step_conference_setup():
                 cache_stats = st.session_state.embedding_cache.get_stats()
                 db_stats = st.session_state.conference_db.get_stats()
                 
-                st.success(f"Opened conference!")
+                # Extract name from filename
+                conf_name = manual_working_file.name.replace('_working.db', '').replace('.db', '')
+                st.session_state.conference_name = conf_name
+                st.success(f"Opened conference: {conf_name}")
                 st.info(f"📦 Cache: {cache_stats.get('total_embeddings', 0):,} embeddings | "
                        f"📋 DB: {db_stats['total_presentations']} presentations, {db_stats['total_sessions']} sessions")
+                st.session_state.steps_completed.add(0)  # Mark setup as complete
                 st.session_state.current_step = 1
                 st.rerun()
         elif manual_cache_file is not None or manual_working_file is not None:
@@ -616,6 +626,7 @@ def step_import_data():
     with col2:
         if stats['total_presentations'] > 0:
             if st.button("Next: Embeddings →", type="primary"):
+                st.session_state.steps_completed.add(1)  # Mark import as complete
                 st.session_state.current_step = 2
                 st.rerun()
 
@@ -662,15 +673,36 @@ def step_embeddings():
             )
             
         elif backend == "ollama":
-            model = st.text_input(
-                "Model Name",
-                value="nomic-embed-text"
-            )
-            
             host = st.text_input(
                 "Ollama Host",
                 value=config.get("ollama_host", "http://localhost:11434")
             )
+            
+            # Auto-discover available models
+            from smart.llm.embeddings import get_ollama_models, check_ollama_connection, OllamaEmbedder
+            
+            if check_ollama_connection(host):
+                available_models = get_ollama_models(host, filter_embedding=True)
+                if available_models:
+                    # Try to find default model in list, otherwise use first available
+                    default_model = OllamaEmbedder.DEFAULT_MODEL
+                    if default_model in available_models:
+                        default_index = available_models.index(default_model)
+                    else:
+                        default_index = 0
+                    
+                    model = st.selectbox(
+                        "Model",
+                        options=available_models,
+                        index=default_index,
+                        help="Models available on your Ollama server (filtered for embedding models)"
+                    )
+                else:
+                    st.warning("No models found. Pull a model with: `ollama pull nomic-embed-text-v2-moe`")
+                    model = st.text_input("Model Name", value=OllamaEmbedder.DEFAULT_MODEL)
+            else:
+                st.error("⚠️ Cannot connect to Ollama. Make sure Ollama is running.")
+                model = st.text_input("Model Name", value=OllamaEmbedder.DEFAULT_MODEL)
         else:
             model = st.text_input(
                 "Model Name",
@@ -765,6 +797,10 @@ def step_embeddings():
                 )
                 st.session_state.embedder = embedder
                 
+                # Reset truncation stats if backend supports it
+                if hasattr(embedder, 'reset_truncation_stats'):
+                    embedder.reset_truncation_stats()
+                
                 # Generate embeddings with progress (cache-aware)
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -776,7 +812,13 @@ def step_embeddings():
                 
                 for i in range(0, len(texts), batch_size):
                     batch_texts = texts[i:i+batch_size]
-                    batch_embeddings = embedder.embed_batch(batch_texts)
+                    batch_ids = abstract_ids[i:i+batch_size]
+                    
+                    # Pass text_ids for truncation tracking if supported
+                    try:
+                        batch_embeddings = embedder.embed_batch(batch_texts, text_ids=batch_ids)
+                    except TypeError:
+                        batch_embeddings = embedder.embed_batch(batch_texts)
                     
                     for text, emb in zip(batch_texts, batch_embeddings):
                         all_embeddings.append(emb)
@@ -799,6 +841,19 @@ def step_embeddings():
                     st.session_state.conference_db.update_embedding_hash(aid, text_hash)
                 
                 st.success(f"✓ {newly_generated} embeddings generated, {from_cache} loaded from cache")
+                
+                # Check for truncation warnings
+                truncation_count = getattr(embedder, 'truncation_count', 0)
+                if truncation_count > 0:
+                    truncated_ids = getattr(embedder, 'truncated_ids', [])
+                    if truncated_ids:
+                        st.warning(
+                            f"⚠️ {truncation_count} texts were truncated due to model context length limits. "
+                            f"Truncated abstract IDs: {', '.join(truncated_ids[:10])}"
+                            + (f"... and {len(truncated_ids) - 10} more" if len(truncated_ids) > 10 else "")
+                        )
+                    else:
+                        st.warning(f"⚠️ {truncation_count} texts were truncated due to model context length limits.")
                 
                 # Save config
                 config["default_backend"] = backend
@@ -852,6 +907,7 @@ def step_embeddings():
     with col2:
         if st.session_state.embeddings is not None:
             if st.button("Next: Check Duplicates →", type="primary"):
+                st.session_state.steps_completed.add(2)  # Mark embeddings as complete
                 st.session_state.current_step = 3
                 st.rerun()
 
@@ -1066,6 +1122,7 @@ def step_check_duplicates():
             st.rerun()
     with col2:
         if st.button("Next: Create Sessions →", type="primary"):
+            st.session_state.steps_completed.add(3)  # Mark duplicates check as complete
             st.session_state.current_step = 4
             st.rerun()
 
@@ -1230,6 +1287,7 @@ def step_create_sessions():
     with col2:
         if st.session_state.sessions_created:
             if st.button("Next: Generate Titles →", type="primary"):
+                st.session_state.steps_completed.add(4)  # Mark session creation as complete
                 st.session_state.current_step = 5
                 st.rerun()
 
@@ -1265,15 +1323,38 @@ def step_generate_titles():
                 value=""
             )
         else:
-            model = st.text_input(
-                "Model Name",
-                value="llama3.2:3b"
-            )
-            
             ollama_host = st.text_input(
                 "Ollama Host",
                 value=config.get("ollama_host", "http://localhost:11434")
             )
+            
+            # Auto-discover available models
+            from smart.llm.titles import get_ollama_models, check_ollama_connection, OllamaTitleGenerator
+            
+            if check_ollama_connection(ollama_host):
+                available_models = get_ollama_models(ollama_host, filter_generation=True)
+                if available_models:
+                    # Try to find default model in list, otherwise use first available
+                    default_model = OllamaTitleGenerator.DEFAULT_MODEL
+                    # Check for model with or without tag
+                    matching_models = [m for m in available_models if m.startswith(default_model)]
+                    if matching_models:
+                        default_index = available_models.index(matching_models[0])
+                    else:
+                        default_index = 0
+                    
+                    model = st.selectbox(
+                        "Model",
+                        options=available_models,
+                        index=default_index,
+                        help="Models available on your Ollama server (excluding embedding-only models)"
+                    )
+                else:
+                    st.warning("No generation models found. Pull a model with: `ollama pull llama3.2`")
+                    model = st.text_input("Model Name", value=OllamaTitleGenerator.DEFAULT_MODEL)
+            else:
+                st.error("⚠️ Cannot connect to Ollama. Make sure Ollama is running.")
+                model = st.text_input("Model Name", value=OllamaTitleGenerator.DEFAULT_MODEL)
     
     with col2:
         force_regenerate = st.checkbox(
@@ -1352,8 +1433,205 @@ def step_generate_titles():
             st.session_state.current_step = 4
             st.rerun()
     with col2:
-        if st.button("Next: Review & Export →", type="primary"):
+        if st.button("Next: Match Committees →", type="primary"):
+            st.session_state.steps_completed.add(5)  # Mark title generation as complete
             st.session_state.current_step = 6
+            st.rerun()
+
+
+def step_match_committees():
+    """Step 7: Match committees to sessions based on similarity."""
+    st.header("🏛️ Match Committees to Sessions")
+    
+    if st.session_state.conference_db is None:
+        st.warning("Please create or open a conference first")
+        return
+    
+    committees = st.session_state.conference_db.get_committees()
+    sessions = st.session_state.conference_db.get_sessions()
+    
+    if not committees:
+        st.warning("No committees imported. You can import committees in the Import Data step, or skip this step.")
+        
+        # Navigation
+        st.divider()
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("← Back"):
+                st.session_state.current_step = 5
+                st.rerun()
+        with col2:
+            if st.button("Skip to Review & Export →", type="primary"):
+                st.session_state.steps_completed.add(6)  # Mark as complete (skipped)
+                st.session_state.current_step = 7
+                st.rerun()
+        return
+    
+    if not sessions:
+        st.warning("No sessions created yet. Create sessions first.")
+        return
+    
+    st.info(f"📊 {len(committees)} committees | {len(sessions)} sessions to match")
+    
+    # Check if embeddings are available
+    if st.session_state.embeddings is None or st.session_state.abstract_ids is None:
+        st.error("Embeddings not available. Please generate embeddings first.")
+        return
+    
+    # Configuration
+    col1, col2 = st.columns(2)
+    with col1:
+        top_k = st.slider("Top matches per session", min_value=1, max_value=5, value=3)
+    with col2:
+        force_rematch = st.checkbox("Force re-match all", value=False)
+    
+    # Check if matches already exist
+    existing_matches = 0
+    for session in sessions:
+        matches = st.session_state.conference_db.get_session_committee_matches(session["session_id"])
+        if matches:
+            existing_matches += 1
+    
+    if existing_matches > 0 and not force_rematch:
+        st.success(f"✓ {existing_matches}/{len(sessions)} sessions already have committee matches")
+    
+    if st.button("Match Committees", type="primary"):
+        try:
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            
+            # Generate committee embeddings
+            with st.spinner("Generating committee embeddings..."):
+                # Get embedder (reuse from session state or create)
+                if st.session_state.embedder is None:
+                    from smart.llm.embeddings import create_embedder
+                    config = load_config()
+                    st.session_state.embedder = create_embedder(
+                        backend=config.get("embedding_backend", "gemini"),
+                        model=config.get("embedding_model", "text-embedding-004"),
+                        api_key=config.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY"),
+                    )
+                
+                embedder = st.session_state.embedder
+                
+                # Get committee texts and generate embeddings
+                committee_texts = [c.get("combined_text") or f"{c['name']}: {c.get('description', '')}" 
+                                   for c in committees]
+                committee_embeddings_list = embedder.embed_batch(committee_texts)
+                committee_embeddings = np.array(committee_embeddings_list)
+            
+            # Match sessions to committees
+            progress_bar = st.progress(0)
+            matched_count = 0
+            
+            for i, session in enumerate(sessions):
+                # Check if already matched (skip unless force)
+                if not force_rematch:
+                    existing = st.session_state.conference_db.get_session_committee_matches(session["session_id"])
+                    if existing:
+                        progress_bar.progress((i + 1) / len(sessions))
+                        continue
+                
+                # Get presentations for this session
+                session_pres = st.session_state.conference_db.get_presentations(session_id=session["session_id"])
+                
+                if not session_pres:
+                    progress_bar.progress((i + 1) / len(sessions))
+                    continue
+                
+                # Get embeddings for session presentations
+                pres_indices = []
+                for pres in session_pres:
+                    try:
+                        idx = st.session_state.abstract_ids.index(pres["abstract_id"])
+                        pres_indices.append(idx)
+                    except ValueError:
+                        continue
+                
+                if not pres_indices:
+                    progress_bar.progress((i + 1) / len(sessions))
+                    continue
+                
+                # Calculate session centroid
+                session_embs = st.session_state.embeddings[pres_indices]
+                session_centroid = np.mean(session_embs, axis=0, keepdims=True)
+                
+                # Calculate similarity to all committees
+                similarities = cosine_similarity(session_centroid, committee_embeddings)[0]
+                
+                # Get top-k matches
+                top_indices = np.argsort(similarities)[-top_k:][::-1]
+                
+                matches = []
+                for rank, idx in enumerate(top_indices, 1):
+                    committee_id = committees[idx]["committee_id"]
+                    score = float(similarities[idx])
+                    matches.append((committee_id, score, rank))
+                
+                # Store matches
+                st.session_state.conference_db.store_session_committee_matches(
+                    session["session_id"],
+                    matches
+                )
+                matched_count += 1
+                
+                progress_bar.progress((i + 1) / len(sessions))
+            
+            st.success(f"✓ Matched {matched_count} sessions to committees")
+            
+            # Show sample matches
+            st.subheader("Sample Matches")
+            sample_sessions = sessions[:5]
+            
+            for session in sample_sessions:
+                matches = st.session_state.conference_db.get_session_committee_matches(session["session_id"])
+                if matches:
+                    session_title = session.get("title", session["session_id"])
+                    st.write(f"**{session_title}**")
+                    for match in matches[:3]:
+                        st.write(f"  • {match['committee_name']} (score: {match['similarity_score']:.3f})")
+            
+        except Exception as e:
+            st.error(f"Error matching committees: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+    
+    # Show existing matches table
+    if existing_matches > 0 or st.button("Show All Matches"):
+        st.subheader("Current Committee Assignments")
+        
+        match_data = []
+        for session in sessions:
+            matches = st.session_state.conference_db.get_session_committee_matches(session["session_id"])
+            session_title = session.get("title", session["session_id"])
+            
+            row = {
+                "Session": session_title or session["session_id"],
+                "Session ID": session["session_id"],
+            }
+            
+            for i, match in enumerate(matches[:3], 1):
+                row[f"Committee {i}"] = match["committee_name"]
+                row[f"Score {i}"] = f"{match['similarity_score']:.3f}"
+            
+            match_data.append(row)
+        
+        if match_data:
+            import pandas as pd
+            df_matches = pd.DataFrame(match_data)
+            st.dataframe(df_matches, use_container_width=True)
+    
+    # Navigation
+    st.divider()
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("← Back"):
+            st.session_state.current_step = 5
+            st.rerun()
+    with col2:
+        if st.button("Next: Review & Export →", type="primary"):
+            st.session_state.steps_completed.add(6)  # Mark committee matching as complete
+            st.session_state.current_step = 7
             st.rerun()
 
 
@@ -1430,7 +1708,18 @@ def step_review_export():
     st.subheader("Sessions")
     sessions = st.session_state.conference_db.get_sessions()
     if sessions:
-        df_sessions = pd.DataFrame(sessions)
+        # Add committee matches to session data
+        sessions_with_committees = []
+        for session in sessions:
+            session_data = dict(session)
+            matches = st.session_state.conference_db.get_session_committee_matches(session["session_id"])
+            if matches:
+                for i, match in enumerate(matches[:3], 1):
+                    session_data[f"committee_{i}"] = match["committee_name"]
+                    session_data[f"committee_{i}_score"] = round(match["similarity_score"], 3)
+            sessions_with_committees.append(session_data)
+        
+        df_sessions = pd.DataFrame(sessions_with_committees)
         
         # Helper function to parse metric values that might be stored in various formats
         def parse_metric_value(x):
@@ -1478,7 +1767,9 @@ def step_review_export():
         col_rename = {}
         for col, name in [("session_id", "Session ID"), ("title", "Title"), 
                           ("coherence", "Coherence"), ("distinctiveness", "Distinctiveness"),
-                          ("presentation_count", "# Presentations")]:
+                          ("presentation_count", "# Presentations"),
+                          ("committee_1", "Committee 1"), ("committee_1_score", "Score 1"),
+                          ("committee_2", "Committee 2"), ("committee_2_score", "Score 2")]:
             if col in df_sessions.columns:
                 display_cols.append(col)
                 col_rename[col] = name
@@ -1535,6 +1826,7 @@ def step_review_export():
                     )
                     st.success(f"Exported to {export_path / version_tag}")
                     st.json(result)
+                    st.session_state.steps_completed.add(7)  # Mark export as complete
                 else:
                     st.error("Embeddings required for this export type")
             else:
@@ -1550,6 +1842,7 @@ def step_review_export():
                 )
                 st.success(f"Exported to {output_file}")
                 st.json(result)
+                st.session_state.steps_completed.add(7)  # Mark export as complete
                 
         except Exception as e:
             st.error(f"Export error: {e}")
@@ -1557,7 +1850,7 @@ def step_review_export():
     # Navigation
     st.divider()
     if st.button("← Back"):
-        st.session_state.current_step = 5
+        st.session_state.current_step = 6
         st.rerun()
 
 
@@ -1571,6 +1864,35 @@ def render_data_viewer_main():
         st.warning("No conference loaded. Please set up a conference first.")
         return
     
+    # Initialize edit mode state
+    if "edit_mode" not in st.session_state:
+        st.session_state.edit_mode = False
+    if "confirm_delete" not in st.session_state:
+        st.session_state.confirm_delete = None
+    
+    # Edit mode toggle and metrics status
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        st.session_state.edit_mode = st.toggle("✏️ Edit Mode", value=st.session_state.edit_mode)
+    
+    with col2:
+        # Check for sessions needing metrics
+        sessions_needing_metrics = st.session_state.conference_db.get_sessions_needing_metrics()
+        if sessions_needing_metrics:
+            st.warning(f"⚠️ {len(sessions_needing_metrics)} sessions need metrics")
+    
+    with col3:
+        if sessions_needing_metrics and st.button("🔄 Recalculate Metrics", type="secondary"):
+            _recalculate_session_metrics(sessions_needing_metrics)
+            st.rerun()
+    
+    # Display persistent error message if set
+    if st.session_state.get("metrics_error"):
+        st.error(st.session_state.metrics_error)
+        if st.button("Dismiss", key="dismiss_metrics_error"):
+            del st.session_state.metrics_error
+            st.rerun()
+    
     # Create tabs for different data views
     tab_pres, tab_hybrid, tab_committees, tab_sessions = st.tabs([
         "👥 Presentations", 
@@ -1580,86 +1902,411 @@ def render_data_viewer_main():
     ])
     
     with tab_pres:
-        st.subheader("Imported Presentations")
-        presentations = st.session_state.conference_db.get_presentations()
-        if presentations:
-            df_pres = pd.DataFrame(presentations)
-            st.info(f"{len(presentations)} presentations loaded")
-            
-            # Show all available columns
-            st.dataframe(
-                df_pres,
-                hide_index=True,
-                height=400,
-                width='stretch',
-            )
-        else:
-            st.info("No presentations imported yet. Use the Import Data step to load presentations.")
+        _render_presentations_tab()
     
     with tab_hybrid:
-        st.subheader("Hybrid Sessions (Input)")
-        st.write("Hybrid sessions are pre-defined sessions (e.g., invited or special sessions) that presentations can be assigned to.")
-        try:
-            # Query sessions table for hybrid sessions (is_hybrid = 1)
-            with sqlite3.connect(st.session_state.conference_db.db_path) as conn:
-                cursor = conn.execute(
-                    "SELECT * FROM sessions WHERE is_hybrid = 1"
-                )
-                columns = [description[0] for description in cursor.description]
-                rows = cursor.fetchall()
-                if rows:
-                    df_hybrid = pd.DataFrame(rows, columns=columns)
-                    st.info(f"{len(rows)} hybrid sessions")
-                    st.dataframe(df_hybrid, hide_index=True, height=400, width='stretch')
-                else:
-                    st.info("No hybrid sessions found. Hybrid sessions can be imported or created with the is_hybrid flag.")
-        except Exception as e:
-            st.error(f"Error loading hybrid sessions: {e}")
+        _render_hybrid_sessions_tab()
     
     with tab_committees:
-        st.subheader("Committees")
-        try:
-            committees = st.session_state.conference_db.get_committees()
-            if committees:
-                df_committees = pd.DataFrame(committees)
-                st.info(f"{len(committees)} committees")
-                st.dataframe(df_committees, hide_index=True, height=400, width='stretch')
-            else:
-                st.info("No committees imported yet. Use the Import Data step to load committees.")
-        except Exception as e:
-            st.error(f"Error loading committees: {e}")
+        _render_committees_tab()
     
     with tab_sessions:
-        st.subheader("Created Sessions")
-        sessions = st.session_state.conference_db.get_sessions()
-        if sessions:
-            df_sessions = pd.DataFrame(sessions)
-            st.info(f"{len(sessions)} sessions created")
-            st.dataframe(
-                df_sessions,
-                hide_index=True,
-                height=400,
-                width='stretch',
-            )
+        _render_sessions_tab()
+
+
+def _recalculate_session_metrics(session_ids: list):
+    """Recalculate coherence and distinctiveness metrics for sessions."""
+    from sklearn.metrics.pairwise import cosine_similarity
+    
+    if st.session_state.embeddings is None or st.session_state.abstract_ids is None:
+        st.session_state.metrics_error = "Cannot recalculate metrics: embeddings not loaded. Generate embeddings first."
+        return
+    
+    # Build abstract_id to embedding index mapping
+    id_to_idx = {aid: i for i, aid in enumerate(st.session_state.abstract_ids)}
+    
+    # First, collect all session embeddings for distinctiveness calculation
+    all_sessions = st.session_state.conference_db.get_sessions()
+    session_embeddings_map = {}  # session_id -> embeddings array
+    session_centroids = {}  # session_id -> centroid
+    
+    for session in all_sessions:
+        session_detail = st.session_state.conference_db.get_session(session["session_id"])
+        if session_detail and "presentations" in session_detail:
+            pres_ids = [p["abstract_id"] for p in session_detail["presentations"]]
+            indices = [id_to_idx[pid] for pid in pres_ids if pid in id_to_idx]
+            if indices:
+                embs = st.session_state.embeddings[indices]
+                session_embeddings_map[session["session_id"]] = embs
+                session_centroids[session["session_id"]] = np.mean(embs, axis=0)
+    
+    progress = st.progress(0)
+    for i, session_id in enumerate(session_ids):
+        if session_id not in session_embeddings_map:
+            progress.progress((i + 1) / len(session_ids))
+            continue
             
-            # Show session details with presentations
-            st.divider()
-            st.subheader("Session Details")
-            session_ids = [s["session_id"] for s in sessions]
-            selected_session = st.selectbox("Select a session to view presentations:", session_ids)
-            
-            if selected_session:
-                session_detail = st.session_state.conference_db.get_session(selected_session)
-                if session_detail and "presentations" in session_detail:
-                    pres_list = session_detail["presentations"]
-                    if pres_list:
-                        st.write(f"**{len(pres_list)} presentations in this session:**")
-                        df_session_pres = pd.DataFrame(pres_list)
-                        st.dataframe(df_session_pres, hide_index=True, width='stretch')
-                    else:
-                        st.info("No presentations assigned to this session.")
+        session_embs = session_embeddings_map[session_id]
+        
+        # Calculate coherence (internal similarity)
+        if len(session_embs) >= 2:
+            similarities = cosine_similarity(session_embs)
+            n = len(session_embs)
+            upper_tri = similarities[np.triu_indices(n, k=1)]
+            coherence = float(np.mean(upper_tri)) if len(upper_tri) > 0 else 0.0
         else:
-            st.info("No sessions created yet. Use the Create Sessions step to generate sessions.")
+            coherence = 1.0  # Single presentation is perfectly coherent
+        
+        # Calculate distinctiveness (1 - max similarity to other sessions)
+        other_centroids = [c for sid, c in session_centroids.items() if sid != session_id]
+        if other_centroids:
+            my_centroid = session_centroids[session_id].reshape(1, -1)
+            other_centroids_array = np.array(other_centroids)
+            sims = cosine_similarity(my_centroid, other_centroids_array)[0]
+            max_sim = float(np.max(sims))
+            distinctiveness = 1.0 - max_sim
+        else:
+            distinctiveness = 1.0  # Only session, perfectly distinct
+        
+        # Update session metrics
+        st.session_state.conference_db.update_session(
+            session_id, coherence=coherence, distinctiveness=distinctiveness
+        )
+        
+        progress.progress((i + 1) / len(session_ids))
+    
+    st.success(f"✅ Recalculated coherence and distinctiveness for {len(session_ids)} sessions")
+
+
+def _render_presentations_tab():
+    """Render the presentations tab with optional edit mode."""
+    st.subheader("Imported Presentations")
+    presentations = st.session_state.conference_db.get_presentations()
+    
+    if not presentations:
+        st.info("No presentations imported yet. Use the Import Data step to load presentations.")
+        return
+    
+    df_pres = pd.DataFrame(presentations)
+    st.info(f"{len(presentations)} presentations loaded")
+    
+    if st.session_state.edit_mode:
+        # Editable view with selection
+        event = st.dataframe(
+            df_pres,
+            hide_index=True,
+            height=400,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="multi-row",
+        )
+        
+        selected_rows = event.selection.rows if event.selection else []
+        
+        if selected_rows:
+            selected_ids = [df_pres.iloc[i]["abstract_id"] for i in selected_rows]
+            st.write(f"**Selected:** {len(selected_ids)} presentation(s)")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # Delete button with confirmation
+                if st.session_state.confirm_delete == "presentations":
+                    st.warning(f"Delete {len(selected_ids)} presentation(s)? This cannot be undone.")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Yes, Delete", type="primary"):
+                            for aid in selected_ids:
+                                st.session_state.conference_db.delete_presentation(aid)
+                            st.session_state.confirm_delete = None
+                            st.success(f"Deleted {len(selected_ids)} presentation(s)")
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Cancel"):
+                            st.session_state.confirm_delete = None
+                            st.rerun()
+                else:
+                    if st.button("🗑️ Delete Selected", type="secondary"):
+                        st.session_state.confirm_delete = "presentations"
+                        st.rerun()
+            
+            with col2:
+                # Move to session
+                sessions = st.session_state.conference_db.get_sessions()
+                if sessions:
+                    session_options = [""] + [s["session_id"] for s in sessions]
+                    target_session = st.selectbox("Move to session:", session_options, key="move_pres_to")
+                    if target_session and st.button("📦 Move Selected"):
+                        moved = 0
+                        for aid in selected_ids:
+                            # Find current session
+                            pres = st.session_state.conference_db.get_presentation(aid)
+                            if pres and pres.get("session_id") and pres["session_id"] != target_session:
+                                st.session_state.conference_db.move_presentation(aid, target_session)
+                                moved += 1
+                        st.success(f"Moved {moved} presentation(s) to {target_session}")
+                        st.rerun()
+            
+            with col3:
+                # Edit single presentation
+                if len(selected_ids) == 1:
+                    if st.button("✏️ Edit Selected"):
+                        st.session_state.editing_presentation = selected_ids[0]
+                        st.rerun()
+        
+        # Edit form for single presentation
+        if hasattr(st.session_state, "editing_presentation") and st.session_state.editing_presentation:
+            pres = st.session_state.conference_db.get_presentation(st.session_state.editing_presentation)
+            if pres:
+                st.divider()
+                st.subheader(f"Edit Presentation: {pres['abstract_id']}")
+                with st.form("edit_presentation_form"):
+                    new_title = st.text_input("Title", value=pres.get("title", ""))
+                    new_abstract = st.text_area("Abstract", value=pres.get("abstract", ""), height=200)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.form_submit_button("💾 Save Changes", type="primary"):
+                            st.session_state.conference_db.update_presentation(
+                                pres["abstract_id"],
+                                title=new_title,
+                                abstract=new_abstract
+                            )
+                            st.success("Presentation updated!")
+                            st.session_state.editing_presentation = None
+                            st.rerun()
+                    with col2:
+                        if st.form_submit_button("❌ Cancel"):
+                            st.session_state.editing_presentation = None
+                            st.rerun()
+    else:
+        # Read-only view
+        st.dataframe(
+            df_pres,
+            hide_index=True,
+            height=400,
+            use_container_width=True,
+        )
+
+
+def _render_hybrid_sessions_tab():
+    """Render the hybrid sessions tab."""
+    st.subheader("Hybrid Sessions (Input)")
+    st.write("Hybrid sessions are pre-defined sessions (e.g., invited or special sessions) that presentations can be assigned to.")
+    try:
+        with sqlite3.connect(st.session_state.conference_db.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT * FROM sessions WHERE is_hybrid = 1"
+            )
+            columns = [description[0] for description in cursor.description]
+            rows = cursor.fetchall()
+            if rows:
+                df_hybrid = pd.DataFrame(rows, columns=columns)
+                st.info(f"{len(rows)} hybrid sessions")
+                st.dataframe(df_hybrid, hide_index=True, height=400, use_container_width=True)
+            else:
+                st.info("No hybrid sessions found. Hybrid sessions can be imported or created with the is_hybrid flag.")
+    except Exception as e:
+        st.error(f"Error loading hybrid sessions: {e}")
+
+
+def _render_committees_tab():
+    """Render the committees tab with optional edit mode."""
+    st.subheader("Committees")
+    
+    try:
+        committees = st.session_state.conference_db.get_committees()
+    except Exception as e:
+        st.error(f"Error loading committees: {e}")
+        return
+    
+    if not committees:
+        st.info("No committees imported yet. Use the Import Data step to load committees.")
+        return
+    
+    df_committees = pd.DataFrame(committees)
+    st.info(f"{len(committees)} committees")
+    
+    if st.session_state.edit_mode:
+        event = st.dataframe(
+            df_committees,
+            hide_index=True,
+            height=400,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="multi-row",
+        )
+        
+        selected_rows = event.selection.rows if event.selection else []
+        
+        if selected_rows:
+            selected_ids = [df_committees.iloc[i]["committee_id"] for i in selected_rows]
+            st.write(f"**Selected:** {len(selected_ids)} committee(s)")
+            
+            if st.session_state.confirm_delete == "committees":
+                st.warning(f"Delete {len(selected_ids)} committee(s)? This will remove their session matches.")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("✅ Yes, Delete", type="primary", key="confirm_del_comm"):
+                        for cid in selected_ids:
+                            st.session_state.conference_db.delete_committee(cid)
+                        st.session_state.confirm_delete = None
+                        st.success(f"Deleted {len(selected_ids)} committee(s)")
+                        st.rerun()
+                with c2:
+                    if st.button("❌ Cancel", key="cancel_del_comm"):
+                        st.session_state.confirm_delete = None
+                        st.rerun()
+            else:
+                if st.button("🗑️ Delete Selected", type="secondary", key="del_comm_btn"):
+                    st.session_state.confirm_delete = "committees"
+                    st.rerun()
+    else:
+        st.dataframe(df_committees, hide_index=True, height=400, use_container_width=True)
+
+
+def _render_sessions_tab():
+    """Render the sessions tab with optional edit mode."""
+    st.subheader("Created Sessions")
+    sessions = st.session_state.conference_db.get_sessions()
+    
+    if not sessions:
+        st.info("No sessions created yet. Use the Create Sessions step to generate sessions.")
+        return
+    
+    # Add committee matches to session data
+    sessions_with_committees = []
+    for session in sessions:
+        session_data = dict(session)
+        matches = st.session_state.conference_db.get_session_committee_matches(session["session_id"])
+        if matches:
+            for i, match in enumerate(matches[:3], 1):
+                session_data[f"committee_{i}"] = match["committee_name"]
+                session_data[f"committee_{i}_score"] = round(match["similarity_score"], 3)
+        sessions_with_committees.append(session_data)
+    
+    df_sessions = pd.DataFrame(sessions_with_committees)
+    st.info(f"{len(sessions)} sessions created")
+    
+    if st.session_state.edit_mode:
+        event = st.dataframe(
+            df_sessions,
+            hide_index=True,
+            height=400,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="multi-row",
+        )
+        
+        selected_rows = event.selection.rows if event.selection else []
+        
+        if selected_rows:
+            selected_ids = [df_sessions.iloc[i]["session_id"] for i in selected_rows]
+            st.write(f"**Selected:** {len(selected_ids)} session(s)")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.session_state.confirm_delete == "sessions":
+                    st.warning(f"Delete {len(selected_ids)} session(s)? Presentations will become unassigned.")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Yes, Delete", type="primary", key="confirm_del_sess"):
+                            for sid in selected_ids:
+                                st.session_state.conference_db.delete_session(sid)
+                            st.session_state.confirm_delete = None
+                            st.success(f"Deleted {len(selected_ids)} session(s)")
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Cancel", key="cancel_del_sess"):
+                            st.session_state.confirm_delete = None
+                            st.rerun()
+                else:
+                    if st.button("🗑️ Delete Selected", type="secondary", key="del_sess_btn"):
+                        st.session_state.confirm_delete = "sessions"
+                        st.rerun()
+            
+            with col2:
+                if len(selected_ids) == 1:
+                    if st.button("✏️ Edit Title", key="edit_sess_btn"):
+                        st.session_state.editing_session = selected_ids[0]
+                        st.rerun()
+        
+        # Edit form for single session
+        if hasattr(st.session_state, "editing_session") and st.session_state.editing_session:
+            session = st.session_state.conference_db.get_session(st.session_state.editing_session)
+            if session:
+                st.divider()
+                st.subheader(f"Edit Session: {session['session_id']}")
+                with st.form("edit_session_form"):
+                    new_title = st.text_input("Title", value=session.get("title", ""))
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.form_submit_button("💾 Save Changes", type="primary"):
+                            st.session_state.conference_db.update_session(
+                                session["session_id"],
+                                title=new_title
+                            )
+                            st.success("Session updated!")
+                            st.session_state.editing_session = None
+                            st.rerun()
+                    with col2:
+                        if st.form_submit_button("❌ Cancel"):
+                            st.session_state.editing_session = None
+                            st.rerun()
+    else:
+        st.dataframe(
+            df_sessions,
+            hide_index=True,
+            height=400,
+            use_container_width=True,
+        )
+    
+    # Show session details with presentations (always visible)
+    st.divider()
+    st.subheader("Session Details")
+    session_ids = [s["session_id"] for s in sessions]
+    selected_session = st.selectbox("Select a session to view presentations:", session_ids)
+    
+    if selected_session:
+        session_detail = st.session_state.conference_db.get_session(selected_session)
+        if session_detail and "presentations" in session_detail:
+            pres_list = session_detail["presentations"]
+            if pres_list:
+                st.write(f"**{len(pres_list)} presentations in this session:**")
+                df_session_pres = pd.DataFrame(pres_list)
+                
+                if st.session_state.edit_mode:
+                    # Allow removing presentations from session
+                    event = st.dataframe(
+                        df_session_pres,
+                        hide_index=True,
+                        use_container_width=True,
+                        on_select="rerun",
+                        selection_mode="multi-row",
+                        key="session_pres_table"
+                    )
+                    
+                    selected_pres = event.selection.rows if event.selection else []
+                    if selected_pres:
+                        selected_pres_ids = [df_session_pres.iloc[i]["abstract_id"] for i in selected_pres]
+                        if st.button(f"🚫 Remove {len(selected_pres_ids)} from session", key="remove_from_sess"):
+                            for aid in selected_pres_ids:
+                                st.session_state.conference_db.remove_presentation_from_session(aid, selected_session)
+                            st.success(f"Removed {len(selected_pres_ids)} presentation(s) from session")
+                            st.rerun()
+                else:
+                    st.dataframe(df_session_pres, hide_index=True, use_container_width=True)
+            else:
+                st.info("No presentations assigned to this session.")
+        
+        # Show committee matches for selected session
+        matches = st.session_state.conference_db.get_session_committee_matches(selected_session)
+        if matches:
+            st.write("**Committee Matches:**")
+            for match in matches:
+                st.write(f"  • {match['committee_name']} (score: {match['similarity_score']:.3f})")
 
 
 def main():
@@ -1674,7 +2321,11 @@ def main():
     st.sidebar.title("🎯 SMART")
     st.sidebar.caption("Session Matching And Automated Recommendation Tool")
     
-    # View Current Data button at the top
+    # Show current conference name if loaded
+    if st.session_state.conference_name:
+        st.sidebar.markdown(f"**📋 {st.session_state.conference_name}**")
+    
+    # View Current Data button
     if st.sidebar.button("📊 View Current Data", use_container_width=True):
         st.session_state.viewing_data = True
         st.rerun()
@@ -1693,30 +2344,43 @@ def main():
         "🔍 Check Duplicates",
         "📊 Create Sessions",
         "✨ Generate Titles",
+        "🏛️ Match Committees",
         "📤 Review & Export",
     ]
     
-    # Show step status
-    for i, step in enumerate(steps):
-        if i < st.session_state.current_step:
-            st.sidebar.success(step)
-        elif i == st.session_state.current_step:
-            st.sidebar.info(f"**{step}** ←")
-        else:
-            st.sidebar.text(step)
+    # Ensure steps_completed is a set (may be loaded as something else)
+    if not isinstance(st.session_state.steps_completed, set):
+        st.session_state.steps_completed = set(st.session_state.steps_completed) if st.session_state.steps_completed else set()
     
-    # Step selection (for jumping)
-    st.sidebar.divider()
-    selected_step = st.sidebar.selectbox(
-        "Jump to step",
-        options=list(range(len(steps))),
-        format_func=lambda x: steps[x],
-        index=st.session_state.current_step,
-    )
-    if selected_step != st.session_state.current_step:
-        st.session_state.current_step = selected_step
-        st.session_state.viewing_data = False
-        st.rerun()
+    # Show step buttons - clickable navigation with completion status
+    st.sidebar.markdown("**Steps:**")
+    for i, step in enumerate(steps):
+        is_current = (i == st.session_state.current_step)
+        is_completed = (i in st.session_state.steps_completed)
+        
+        # Determine button style based on status
+        if is_completed:
+            # Green for completed
+            button_label = f"✅ {step}"
+            button_type = "primary" if is_current else "secondary"
+        elif is_current:
+            # Blue/highlighted for current
+            button_label = f"👉 {step}"
+            button_type = "primary"
+        else:
+            # Default for not yet done
+            button_label = f"○ {step}"
+            button_type = "secondary"
+        
+        if st.sidebar.button(
+            button_label,
+            key=f"step_btn_{i}",
+            use_container_width=True,
+            type=button_type if is_current else "secondary",
+        ):
+            st.session_state.current_step = i
+            st.session_state.viewing_data = False
+            st.rerun()
     
     # Render current view
     if st.session_state.viewing_data:
@@ -1734,6 +2398,7 @@ def main():
             step_check_duplicates,
             step_create_sessions,
             step_generate_titles,
+            step_match_committees,
             step_review_export,
         ]
         

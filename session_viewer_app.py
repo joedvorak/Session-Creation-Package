@@ -83,7 +83,12 @@ def load_sessions(bundle_path: str) -> pd.DataFrame:
 @st.cache_data
 def load_pres_similarities(bundle_path: str) -> pd.DataFrame:
     """Load presentation similarity matrix."""
-    return pd.read_parquet(Path(bundle_path) / "pres_similarities.parquet")
+    bundle = Path(bundle_path)
+    # Try standard name first, then fallback to legacy name
+    pres_sim_path = bundle / "pres_similarities.parquet"
+    if not pres_sim_path.exists():
+        pres_sim_path = bundle / "presentation_similarities.parquet"
+    return pd.read_parquet(pres_sim_path)
 
 
 @st.cache_data
@@ -276,18 +281,28 @@ def show_sessions_tab(df_sessions, df_presentations, df_session_similarity, sess
     # Determine session ID column
     sess_id_col = "cluster_id" if "cluster_id" in df_sessions.columns else "session_id"
     
+    # Determine size and coherence column names (handle both old and new naming)
+    size_col = "session_size" if "session_size" in df_sessions.columns else "presentation_count"
+    coherence_col = "session_coherence" if "session_coherence" in df_sessions.columns else "coherence"
+    
     # Charts
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("Session Size Distribution")
-        size_data = df_sessions.set_index(sess_id_col)["session_size"]
-        st.bar_chart(size_data, x_label="Session", y_label="Presentations")
+        if size_col in df_sessions.columns:
+            size_data = df_sessions.set_index(sess_id_col)[size_col]
+            st.bar_chart(size_data, x_label="Session", y_label="Presentations")
+        else:
+            st.info("Session size data not available")
     
     with col2:
         st.subheader("Session Coherence Distribution")
-        coherence_data = df_sessions.set_index(sess_id_col)["session_coherence"]
-        st.bar_chart(coherence_data, x_label="Session", y_label="Coherence")
+        if coherence_col in df_sessions.columns:
+            coherence_data = df_sessions.set_index(sess_id_col)[coherence_col]
+            st.bar_chart(coherence_data, x_label="Session", y_label="Coherence")
+        else:
+            st.info("Session coherence data not available")
     
     with st.expander("**Instructions** - Click to expand"):
         st.write(
@@ -298,6 +313,7 @@ def show_sessions_tab(df_sessions, df_presentations, df_session_similarity, sess
     # Session table
     column_config = {
         "session_coherence": st.column_config.NumberColumn(format="%.3f"),
+        "coherence": st.column_config.NumberColumn(format="%.3f"),
         "session_std_dev": st.column_config.NumberColumn(format="%.3f"),
     }
     

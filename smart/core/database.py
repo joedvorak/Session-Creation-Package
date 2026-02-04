@@ -876,11 +876,16 @@ class ConferenceDB:
             return [dict(row) for row in cursor]
     
     def get_presentation(self, abstract_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single presentation by ID."""
+        """Get a single presentation by ID, including current session assignment."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                "SELECT * FROM presentations WHERE abstract_id = ?",
+                """
+                SELECT p.*, pl.session_id, pl.presentation_fit
+                FROM presentations p
+                LEFT JOIN placements pl ON p.abstract_id = pl.abstract_id AND pl.is_current = 1
+                WHERE p.abstract_id = ?
+                """,
                 (abstract_id,)
             )
             row = cursor.fetchone()
@@ -1656,6 +1661,7 @@ class ConferenceDB:
     ) -> bool:
         """
         Remove a presentation from its current session.
+        Also clears metrics on the affected session.
         
         Args:
             abstract_id: Presentation ID
@@ -1665,7 +1671,9 @@ class ConferenceDB:
             True if removed, False if not found
         """
         with sqlite3.connect(self.db_path) as conn:
+            # Get affected session(s) for metric clearing
             if session_id:
+                affected_sessions = [session_id]
                 cursor = conn.execute(
                     """
                     UPDATE placements SET is_current = 0
@@ -1674,12 +1682,30 @@ class ConferenceDB:
                     (abstract_id, session_id)
                 )
             else:
+                # Find which sessions this presentation is in
+                sess_cursor = conn.execute(
+                    "SELECT DISTINCT session_id FROM placements WHERE abstract_id = ? AND is_current = 1",
+                    (abstract_id,)
+                )
+                affected_sessions = [row[0] for row in sess_cursor.fetchall()]
+                
                 cursor = conn.execute(
                     """
                     UPDATE placements SET is_current = 0
                     WHERE abstract_id = ? AND is_current = 1
                     """,
                     (abstract_id,)
+                )
+            
+            # Clear metrics on affected sessions
+            if cursor.rowcount > 0 and affected_sessions:
+                placeholders = ','.join(['?'] * len(affected_sessions))
+                conn.execute(
+                    f"""
+                    UPDATE sessions SET coherence = NULL, distinctiveness = NULL, updated_at = ?
+                    WHERE session_id IN ({placeholders})
+                    """,
+                    [datetime.now().isoformat()] + affected_sessions
                 )
             
             conn.commit()
@@ -1693,14 +1719,17 @@ class ConferenceDB:
     ) -> None:
         """
         Move a presentation from its current session to another.
+        Clears metrics on both source and destination sessions.
         
         Args:
             abstract_id: Presentation ID
             to_session_id: Destination session ID
             fit_score: Optional new fit score
         """
-        self.remove_presentation_from_session(abstract_id)
+        self.remove_presentation_from_session(abstract_id)  # This now clears source session metrics
         self.add_presentation_to_session(abstract_id, to_session_id, fit_score, "manual_move")
+        # Clear metrics on destination session
+        self.clear_session_metrics(to_session_id)
     
     def get_placements(
         self,
@@ -1763,11 +1792,102 @@ class ConferenceDB:
             conn.commit()
             return cursor.rowcount > 0
     
-    # ========== Single Entity Operations ==========
+    def update_presentation(
+        self,
+        abstract_id: str,
+        title: Optional[str] = None,
+        abstract: Optional[str] = None,
+        **kwargs
+    ) -> bool:
+        """
+        Update presentation fields.
+        
+        Args:
+            abstract_id: Presentation ID to update
+            title: New title (if provided)
+            abstract: New abstract (if provided)
+            **kwargs: Additional fields to update
+            
+        Returns:
+            True if updated, False if not found
+        """
+        updates = []
+        params = []
+        
+        if title is not None:
+            updates.append("title = ?")
+            params.append(title)
+        
+        if abstract is not None:
+            updates.append("abstract = ?")
+            params.append(abstract)
+        
+        # Handle kwargs for flexibility
+        for key, value in kwargs.items():
+            if key in ("technical_community", "session_preference", "presenter_email",
+                       "presenter_first_name", "presenter_last_name", "affiliation"):
+                updates.append(f"{key} = ?")
+                params.append(value)
+        
+        if not updates:
+            return False
+        
+        params.append(abstract_id)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                f"UPDATE presentations SET {', '.join(updates)} WHERE abstract_id = ?",
+                params
+            )
+            conn.commit()
+            return cursor.rowcount > 0
     
+    def clear_session_metrics(self, session_id: Optional[str] = None) -> int:
+        """
+        Clear coherence and distinctiveness metrics for session(s).
+        
+        Args:
+            session_id: Specific session to clear, or None for all sessions
+            
+        Returns:
+            Number of sessions affected
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            if session_id:
+                cursor = conn.execute(
+                    """
+                    UPDATE sessions SET coherence = NULL, distinctiveness = NULL, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (datetime.now().isoformat(), session_id)
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE sessions SET coherence = NULL, distinctiveness = NULL, updated_at = ?
+                    """,
+                    (datetime.now().isoformat(),)
+                )
+            conn.commit()
+            return cursor.rowcount
+    
+    def get_sessions_needing_metrics(self) -> List[str]:
+        """
+        Get list of session IDs that have NULL coherence (need recalculation).
+        
+        Returns:
+            List of session IDs needing metric calculation
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT session_id FROM sessions WHERE coherence IS NULL"
+            )
+            return [row[0] for row in cursor.fetchall()]
+
     def delete_presentation(self, abstract_id: str) -> bool:
         """
         Delete a single presentation.
+        Also clears metrics on any affected sessions.
         
         Args:
             abstract_id: ID of presentation to delete
@@ -1776,11 +1896,29 @@ class ConferenceDB:
             True if deleted, False if not found
         """
         with sqlite3.connect(self.db_path) as conn:
-            # Remove placements first
+            # Get affected session IDs before deleting placements
+            cursor = conn.execute(
+                "SELECT DISTINCT session_id FROM placements WHERE abstract_id = ? AND is_current = 1",
+                (abstract_id,)
+            )
+            affected_sessions = [row[0] for row in cursor.fetchall()]
+            
+            # Remove placements
             conn.execute(
                 "DELETE FROM placements WHERE abstract_id = ?",
                 (abstract_id,)
             )
+            
+            # Clear metrics on affected sessions
+            if affected_sessions:
+                placeholders = ','.join(['?'] * len(affected_sessions))
+                conn.execute(
+                    f"""
+                    UPDATE sessions SET coherence = NULL, distinctiveness = NULL, updated_at = ?
+                    WHERE session_id IN ({placeholders})
+                    """,
+                    [datetime.now().isoformat()] + affected_sessions
+                )
             
             cursor = conn.execute(
                 "DELETE FROM presentations WHERE abstract_id = ?",
