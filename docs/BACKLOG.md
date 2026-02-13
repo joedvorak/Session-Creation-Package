@@ -24,7 +24,7 @@
 ## Category: Embedding Cache & Model Consistency
 
 ### EMB-001: Fix Cache Status Display
-**Priority**: P0 | **Status**: 🔴 Not Started
+**Priority**: P0 | **Status**: � Complete
 
 **Problem**: The embedding step UI does not correctly show cached embedding counts. It always shows 0 cached even when embeddings exist.
 
@@ -36,14 +36,22 @@
 3. User selects a cached model config to load or generate missing
 
 **Files**: 
-- `smart/core/database.py` - Add coverage query method
-- `smart_app.py` - Redesign embedding step UI
+- `smart/core/database.py` - Added `get_coverage_by_model()` and `get_all_model_configs()` methods
+- `apps/smart_app.py` - Redesigned embedding step UI with model selection
 
 **Acceptance Criteria**:
-- [ ] UI shows list of models with cached embeddings for current presentations
-- [ ] Each model shows X/Y cached count
-- [ ] User can select a model to load from cache or generate missing
-- [ ] No API key required just to check cache status
+- [x] UI shows list of models with cached embeddings for current presentations
+- [x] Each model shows X/Y cached count
+- [x] User can select a model to load from cache or generate missing
+- [x] No API key required just to check cache status
+
+**Implementation**:
+- `EmbeddingCache.get_coverage_by_model(texts)` queries all model configs and returns coverage for each
+- UI shows radio buttons for available cached models plus "Generate New" option
+- Selected model's config stored in `st.session_state.active_embedding_config`
+- Model details shown in expandable section
+
+**Completed**: 2026-02-12
 
 ---
 

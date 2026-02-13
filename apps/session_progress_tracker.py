@@ -14,6 +14,11 @@ Usage:
 """
 
 import os
+import sys
+
+# Add parent directory to path for smart module imports
+# Required when running from apps/ subdirectory
+sys.path.insert(0, str(__file__ and os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import numpy as np
 import pandas as pd
 import streamlit as st

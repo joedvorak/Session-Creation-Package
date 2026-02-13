@@ -378,6 +378,128 @@ class EmbeddingCache:
             "created_at": created_at,
             "db_path": str(self.db_path),
         }
+    
+    def get_coverage_by_model(
+        self, 
+        texts: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Get cache coverage for a list of texts across all stored model configurations.
+        
+        This enables the UI to show which models have cached embeddings for the
+        current presentations without needing to know the exact model version.
+        
+        Args:
+            texts: List of texts to check coverage for
+            
+        Returns:
+            List of dicts, each containing:
+            - model_name: str
+            - model_version: str
+            - task_type: str
+            - dimensions: int
+            - cached_count: int (how many of the input texts are cached)
+            - total_count: int (total embeddings in cache for this config)
+            - coverage_pct: float (cached_count / len(texts) * 100)
+            - config: EmbeddingConfig object for this model
+        """
+        if not texts:
+            return []
+        
+        # Get hashes for the input texts
+        text_hashes = [self._hash_text(t) for t in texts]
+        text_hash_set = set(text_hashes)
+        
+        results = []
+        
+        with sqlite3.connect(self.db_path) as conn:
+            # Get all unique model configurations from the registry
+            cursor = conn.execute(
+                """
+                SELECT model_name, model_version, task_type, dimensions, embedding_count
+                FROM model_registry
+                ORDER BY last_used DESC
+                """
+            )
+            model_configs = cursor.fetchall()
+            
+            for model_name, model_version, task_type, dimensions, total_count in model_configs:
+                # Build config for this model
+                config = EmbeddingConfig(
+                    model_name=model_name,
+                    model_version=model_version,
+                    task_type=task_type,
+                    dimensions=dimensions
+                )
+                config_hash = config.config_hash()
+                
+                # Count how many of the input texts are cached for this config
+                placeholders = ",".join("?" * len(text_hashes))
+                cursor = conn.execute(
+                    f"""
+                    SELECT COUNT(DISTINCT text_hash)
+                    FROM embeddings
+                    WHERE text_hash IN ({placeholders}) AND config_hash = ?
+                    """,
+                    text_hashes + [config_hash]
+                )
+                cached_count = cursor.fetchone()[0]
+                
+                # Only include configs that have at least one match
+                if cached_count > 0:
+                    results.append({
+                        "model_name": model_name,
+                        "model_version": model_version,
+                        "task_type": task_type,
+                        "dimensions": dimensions,
+                        "cached_count": cached_count,
+                        "total_count": total_count,
+                        "coverage_pct": cached_count / len(texts) * 100,
+                        "config": config,
+                    })
+        
+        # Sort by coverage (highest first)
+        results.sort(key=lambda x: x["cached_count"], reverse=True)
+        return results
+    
+    def get_all_model_configs(self) -> List[Dict[str, Any]]:
+        """
+        Get all model configurations stored in the cache.
+        
+        Returns:
+            List of dicts with model_name, model_version, task_type, dimensions,
+            embedding_count, first_used, last_used, and config object.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT model_name, model_version, task_type, dimensions, 
+                       embedding_count, first_used, last_used
+                FROM model_registry
+                ORDER BY last_used DESC
+                """
+            )
+            
+            results = []
+            for row in cursor:
+                config = EmbeddingConfig(
+                    model_name=row[0],
+                    model_version=row[1],
+                    task_type=row[2],
+                    dimensions=row[3]
+                )
+                results.append({
+                    "model_name": row[0],
+                    "model_version": row[1],
+                    "task_type": row[2],
+                    "dimensions": row[3],
+                    "embedding_count": row[4],
+                    "first_used": row[5],
+                    "last_used": row[6],
+                    "config": config,
+                })
+            
+            return results
 
 
 class ConferenceDB:

@@ -5,12 +5,22 @@ Streamlit-based local application for conference session organization.
 """
 
 import os
+import sys
 import json
 import sqlite3
+from pathlib import Path
+
+# Add parent directory to path for smart module imports
+# Required when running from apps/ subdirectory
+PROJECT_ROOT = Path(__file__).parent.parent.resolve() if __file__ else Path.cwd()
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# Default database directory (consistent location regardless of cwd)
+DEFAULT_DB_DIR = PROJECT_ROOT / "databases"
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-from pathlib import Path
 from datetime import datetime
 
 # Import SMART modules
@@ -79,6 +89,7 @@ def init_session_state():
         "import_tab": "📄 Regular Presentations",  # Track selected import tab
         "conference_name": None,  # Current conference name for display
         "steps_completed": set(),  # Track which steps have been completed
+        "active_embedding_config": None,  # Track the embedding model config in use (EMB-001/002)
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -112,8 +123,8 @@ def step_conference_setup():
         
         working_dir = st.text_input(
             "Working Directory",
-            value=str(Path.cwd()),
-            help="Directory for database files"
+            value=str(DEFAULT_DB_DIR),
+            help="Directory for database files (default: databases/ in project root)"
         )
         
         # Optional: reuse existing embedding cache
@@ -716,174 +727,272 @@ def step_embeddings():
             index=0
         )
     
-    # Check cache status for current settings
-    st.divider()
-    st.subheader("Cache Status")
-    
+    # Get texts for cache coverage check
     texts = [p["combined_text"] for p in presentations]
     abstract_ids = [p["abstract_id"] for p in presentations]
     
-    # Check how many are already cached
-    from smart.core.database import EmbeddingConfig
-    embedding_config = EmbeddingConfig(
-        model_name=model if model else "unknown",
-        model_version=model if model else "unknown",
-        task_type=task_type,
+    # Check if embeddings are already loaded for all presentations
+    embeddings_loaded = (
+        st.session_state.embeddings is not None and 
+        len(st.session_state.embeddings) == len(presentations)
     )
     
-    cached_count = 0
-    uncached_count = 0
-    cached_embeddings = {}
+    # Check cache coverage by model (no API key required)
+    st.divider()
+    st.subheader("📦 Embedding Status")
     
-    # Only check cache if we have an embedding_cache initialized
-    if st.session_state.embedding_cache is not None:
-        try:
-            # Check each text individually to find what's cached
-            for i, text in enumerate(texts):
-                cached_emb = st.session_state.embedding_cache.get_embedding(text, embedding_config)
-                if cached_emb is not None:
-                    cached_count += 1
-                    cached_embeddings[text] = cached_emb
-                else:
-                    uncached_count += 1
-        except Exception as e:
-            st.warning(f"Error checking cache: {e}. Assuming all need generation.")
-            uncached_count = len(texts)
+    # If embeddings are already loaded, show simplified status
+    if embeddings_loaded:
+        st.success(f"✓ All {len(presentations)} presentations have embeddings loaded and ready")
+        
+        # Show which config was used
+        if st.session_state.active_embedding_config is not None:
+            cfg = st.session_state.active_embedding_config
+            with st.expander("Current embedding configuration", expanded=False):
+                st.code(f"""Model: {cfg.model_name}
+Version: {cfg.model_version}
+Task: {cfg.task_type}
+Dimensions: {cfg.dimensions}""")
+        
+        # Option to regenerate with different model
+        if st.checkbox("Load different model or regenerate", key="show_cache_options"):
+            st.warning("⚠️ Changing models will clear currently loaded embeddings")
+            show_cache_ui = True
+        else:
+            show_cache_ui = False
+            
+        cached_models = []
+        selected_config = st.session_state.active_embedding_config
+        cached_embeddings = {}
+        cached_count = len(presentations)
+        uncached_count = 0
     else:
-        st.warning("Cache not initialized. Please create or open a conference first.")
-        uncached_count = len(texts)
+        show_cache_ui = True
+        cached_models = []
+        selected_config = None
+        cached_embeddings = {}
     
-    # Display cache status metrics
-    col_stat1, col_stat2, col_stat3 = st.columns(3)
-    with col_stat1:
-        st.metric("Total Presentations", len(presentations))
-    with col_stat2:
-        st.metric("Already Cached", cached_count, help="Embeddings already in cache for this model")
-    with col_stat3:
-        st.metric("Need Generation", uncached_count, help="Presentations requiring API call")
-    
-    # Show progress bar of cache coverage
-    if len(presentations) > 0:
-        cache_pct = cached_count / len(presentations) * 100
-        st.progress(cache_pct / 100, text=f"{cache_pct:.1f}% cached")
+    # Show cache selection UI if needed
+    if show_cache_ui if embeddings_loaded else True:
+        if st.session_state.embedding_cache is not None:
+            try:
+                # Get coverage for all cached models
+                cached_models = st.session_state.embedding_cache.get_coverage_by_model(texts)
+            except Exception as e:
+                st.warning(f"Error checking cache: {e}")
+        
+        if cached_models:
+            st.info(f"Found {len(cached_models)} model configuration(s) with cached embeddings")
+            
+            # Show cached models in a table
+            st.markdown("**Available cached models:**")
+            
+            # Create selection options
+            model_options = []
+            for i, m in enumerate(cached_models):
+                coverage_str = f"{m['cached_count']}/{len(texts)} ({m['coverage_pct']:.0f}%)"
+                label = f"{m['model_name']} ({m['task_type']}) - {coverage_str}"
+                model_options.append(label)
+            
+            # Add "Generate New" option
+            model_options.append("🆕 Generate with new model configuration")
+            
+            selected_idx = st.radio(
+                "Select embedding source",
+                range(len(model_options)),
+                format_func=lambda i: model_options[i],
+                key="embedding_source_select"
+            )
+            
+            if selected_idx < len(cached_models):
+                # User selected a cached model
+                selected_model = cached_models[selected_idx]
+                selected_config = selected_model["config"]
+                
+                # Show details for selected model
+                with st.expander("Model details", expanded=False):
+                    st.code(f"""Model: {selected_model['model_name']}
+Version: {selected_model['model_version']}
+Task: {selected_model['task_type']}
+Dimensions: {selected_model['dimensions']}
+Coverage: {selected_model['cached_count']}/{len(texts)} presentations""")
+                
+                # Load cached embeddings for this config
+                try:
+                    batch_result = st.session_state.embedding_cache.get_embeddings_batch(texts, selected_config)
+                    cached_embeddings = {t: e for t, e in batch_result.items() if e is not None}
+                    cached_count = len(cached_embeddings)
+                    uncached_count = len(texts) - cached_count
+                except Exception as e:
+                    st.error(f"Error loading cache: {e}")
+                    cached_count = 0
+                    uncached_count = len(texts)
+                
+                # Display cache status metrics
+                col_stat1, col_stat2, col_stat3 = st.columns(3)
+                with col_stat1:
+                    st.metric("Total Presentations", len(presentations))
+                with col_stat2:
+                    st.metric("Already Cached", cached_count, help="Embeddings in cache for this model")
+                with col_stat3:
+                    st.metric("Need Generation", uncached_count, help="Will require API call")
+                
+                # Show progress bar
+                if len(presentations) > 0:
+                    cache_pct = cached_count / len(presentations) * 100
+                    st.progress(cache_pct / 100, text=f"{cache_pct:.1f}% cached")
+                
+                # Store selected config in session state for consistency (EMB-002 prep)
+                st.session_state.active_embedding_config = selected_config
+                
+            else:
+                # User wants to generate with new configuration
+                selected_config = None
+                cached_count = 0
+                uncached_count = len(texts)
+                
+                st.info(f"Will generate embeddings for all {len(texts)} presentations using: **{model}** ({task_type})")
+                
+                # Clear any cached embeddings reference
+                cached_embeddings = {}
+        
+        else:
+            # No cached models found
+            st.info("No cached embeddings found for current presentations. Configure model above and generate.")
+            cached_count = 0
+            uncached_count = len(texts)
+            selected_config = None
     
     st.divider()
     
-    # Generation buttons
-    col_gen, col_load = st.columns(2)
-    
-    with col_gen:
-        generate_label = "Generate Embeddings" if uncached_count == len(presentations) else f"Generate {uncached_count} Missing Embeddings"
-        generate_disabled = uncached_count == 0
+    # Generation buttons - only show if embeddings not fully loaded or user wants to change
+    if not embeddings_loaded or show_cache_ui:
+        col_gen, col_load = st.columns(2)
         
-        if st.button(generate_label, type="primary", disabled=generate_disabled):
-            try:
-                # Create embedder
-                kwargs = {}
-                if backend == "gemini":
-                    # Use API key from input, env var, or .env file
-                    actual_api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
-                    if actual_api_key:
-                        kwargs["api_key"] = actual_api_key
-                elif backend == "ollama":
-                    kwargs["host"] = host
+        with col_gen:
+            generate_label = "Generate Embeddings" if uncached_count == len(presentations) else f"Generate {uncached_count} Missing Embeddings"
+            generate_disabled = uncached_count == 0
+            
+            if st.button(generate_label, type="primary", disabled=generate_disabled):
+                # Clear existing embeddings if regenerating
+                if embeddings_loaded:
+                    st.session_state.embeddings = None
+                    st.session_state.abstract_ids = None
                 
-                embedder = create_embedder(
-                    backend=backend,
-                    model=model,
-                    cache=st.session_state.embedding_cache,
-                    task_type=task_type,
-                    **kwargs
-                )
-                st.session_state.embedder = embedder
-                
-                # Reset truncation stats if backend supports it
-                if hasattr(embedder, 'reset_truncation_stats'):
-                    embedder.reset_truncation_stats()
-                
-                # Generate embeddings with progress (cache-aware)
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                all_embeddings = []
-                newly_generated = 0
-                from_cache = 0
-                batch_size = 10
-                
-                for i in range(0, len(texts), batch_size):
-                    batch_texts = texts[i:i+batch_size]
-                    batch_ids = abstract_ids[i:i+batch_size]
+                try:
+                    # Create embedder
+                    kwargs = {}
+                    if backend == "gemini":
+                        # Use API key from input, env var, or .env file
+                        actual_api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+                        if actual_api_key:
+                            kwargs["api_key"] = actual_api_key
+                    elif backend == "ollama":
+                        kwargs["host"] = host
                     
-                    # Pass text_ids for truncation tracking if supported
-                    try:
-                        batch_embeddings = embedder.embed_batch(batch_texts, text_ids=batch_ids)
-                    except TypeError:
-                        batch_embeddings = embedder.embed_batch(batch_texts)
+                    embedder = create_embedder(
+                        backend=backend,
+                        model=model,
+                        cache=st.session_state.embedding_cache,
+                        task_type=task_type,
+                        **kwargs
+                    )
+                    st.session_state.embedder = embedder
                     
-                    for text, emb in zip(batch_texts, batch_embeddings):
-                        all_embeddings.append(emb)
-                        if text in cached_embeddings:
-                            from_cache += 1
+                    # Reset truncation stats if backend supports it
+                    if hasattr(embedder, 'reset_truncation_stats'):
+                        embedder.reset_truncation_stats()
+                    
+                    # Generate embeddings with progress (cache-aware)
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    all_embeddings = []
+                    newly_generated = 0
+                    from_cache = 0
+                    batch_size = 10
+                    
+                    for i in range(0, len(texts), batch_size):
+                        batch_texts = texts[i:i+batch_size]
+                        batch_ids = abstract_ids[i:i+batch_size]
+                        
+                        # Pass text_ids for truncation tracking if supported
+                        try:
+                            batch_embeddings = embedder.embed_batch(batch_texts, text_ids=batch_ids)
+                        except TypeError:
+                            batch_embeddings = embedder.embed_batch(batch_texts)
+                        
+                        for text, emb in zip(batch_texts, batch_embeddings):
+                            all_embeddings.append(emb)
+                            if text in cached_embeddings:
+                                from_cache += 1
+                            else:
+                                newly_generated += 1
+                        
+                        progress = (i + len(batch_texts)) / len(texts)
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processed {i + len(batch_texts)}/{len(texts)} ({from_cache} cached, {newly_generated} new)")
+                    
+                    st.session_state.embeddings = np.array(all_embeddings)
+                    st.session_state.abstract_ids = abstract_ids
+                    
+                    # Store the active embedding config for model consistency (EMB-002)
+                    if hasattr(embedder, 'config'):
+                        st.session_state.active_embedding_config = embedder.config
+                    
+                    # Update database with embedding hashes
+                    for aid, text in zip(abstract_ids, texts):
+                        import hashlib
+                        text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+                        st.session_state.conference_db.update_embedding_hash(aid, text_hash)
+                    
+                    st.success(f"✓ {newly_generated} embeddings generated, {from_cache} loaded from cache")
+                    
+                    # Check for truncation warnings
+                    truncation_count = getattr(embedder, 'truncation_count', 0)
+                    if truncation_count > 0:
+                        truncated_ids = getattr(embedder, 'truncated_ids', [])
+                        if truncated_ids:
+                            st.warning(
+                                f"⚠️ {truncation_count} texts were truncated due to model context length limits. "
+                                f"Truncated abstract IDs: {', '.join(truncated_ids[:10])}"
+                                + (f"... and {len(truncated_ids) - 10} more" if len(truncated_ids) > 10 else "")
+                            )
                         else:
-                            newly_generated += 1
+                            st.warning(f"⚠️ {truncation_count} texts were truncated due to model context length limits.")
                     
-                    progress = (i + len(batch_texts)) / len(texts)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processed {i + len(batch_texts)}/{len(texts)} ({from_cache} cached, {newly_generated} new)")
-                
-                st.session_state.embeddings = np.array(all_embeddings)
-                st.session_state.abstract_ids = abstract_ids
-                
-                # Update database with embedding hashes
-                for aid, text in zip(abstract_ids, texts):
-                    import hashlib
-                    text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
-                    st.session_state.conference_db.update_embedding_hash(aid, text_hash)
-                
-                st.success(f"✓ {newly_generated} embeddings generated, {from_cache} loaded from cache")
-                
-                # Check for truncation warnings
-                truncation_count = getattr(embedder, 'truncation_count', 0)
-                if truncation_count > 0:
-                    truncated_ids = getattr(embedder, 'truncated_ids', [])
-                    if truncated_ids:
-                        st.warning(
-                            f"⚠️ {truncation_count} texts were truncated due to model context length limits. "
-                            f"Truncated abstract IDs: {', '.join(truncated_ids[:10])}"
-                            + (f"... and {len(truncated_ids) - 10} more" if len(truncated_ids) > 10 else "")
-                        )
-                    else:
-                        st.warning(f"⚠️ {truncation_count} texts were truncated due to model context length limits.")
-                
-                # Save config
-                config["default_backend"] = backend
-                config["default_embedding_model"] = model
-                save_config(config)
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Error generating embeddings: {e}")
-                import traceback
-                st.code(traceback.format_exc())
+                    # Save config
+                    config["default_backend"] = backend
+                    config["default_embedding_model"] = model
+                    save_config(config)
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Error generating embeddings: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
     
-    with col_load:
-        load_disabled = cached_count == 0
-        
-        if st.button("Load All from Cache", disabled=load_disabled, 
-                     help="Load all cached embeddings without calling API"):
-            if cached_count < len(presentations):
-                st.warning(f"Only {cached_count}/{len(presentations)} presentations are cached. "
-                          f"Use 'Generate Missing Embeddings' to compute the remaining {uncached_count}.")
-            else:
-                # All embeddings are cached - load them
-                embeddings = []
-                for text in texts:
-                    embeddings.append(cached_embeddings[text])
-                
-                st.session_state.embeddings = np.array(embeddings)
-                st.session_state.abstract_ids = abstract_ids
-                st.success(f"✓ Loaded {len(embeddings)} embeddings from cache!")
-                st.rerun()
+        with col_load:
+            # Load button - only enabled if a cached model is selected and has full coverage
+            load_disabled = cached_count == 0 or selected_config is None
+            load_label = "Load All from Cache" if cached_count == len(texts) else f"Load {cached_count} from Cache"
+            
+            if st.button(load_label, disabled=load_disabled, 
+                         help="Load cached embeddings without calling API"):
+                if cached_count < len(presentations):
+                    st.warning(f"Only {cached_count}/{len(presentations)} presentations are cached for the selected model. "
+                              f"Use 'Generate Missing Embeddings' to compute the remaining {uncached_count}.")
+                else:
+                    # All embeddings are cached - load them
+                    embeddings = []
+                    for text in texts:
+                        embeddings.append(cached_embeddings[text])
+                    
+                    st.session_state.embeddings = np.array(embeddings)
+                    st.session_state.abstract_ids = abstract_ids
+                    st.session_state.active_embedding_config = selected_config
+                    st.success(f"✓ Loaded {len(embeddings)} embeddings from cache using {selected_config.model_name}!")
+                    st.rerun()
     
     # Show current embeddings status
     st.divider()

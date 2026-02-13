@@ -121,6 +121,18 @@ smart/
 - `{conference}_cache.db` - Embedding cache (reusable across workflows)
 - `{conference}_working.db` - Working data (presentations, sessions, etc.)
 
+**EmbeddingCache Methods**:
+
+| Method | Purpose |
+|--------|---------|
+| `get_embedding(text, config)` | Get single cached embedding |
+| `get_embeddings_batch(texts, config)` | Get multiple cached embeddings |
+| `store_embedding(text, embedding, config)` | Store single embedding |
+| `store_embeddings_batch(items, config)` | Store multiple embeddings |
+| `get_coverage_by_model(texts)` | Get cache coverage per model for given texts |
+| `get_all_model_configs()` | List all model configurations in cache |
+| `get_stats()` | Get cache statistics |
+
 **EmbeddingCache Schema**:
 ```sql
 CREATE TABLE embeddings (
@@ -134,6 +146,17 @@ CREATE TABLE embeddings (
     embedding BLOB NOT NULL,           -- numpy array as bytes
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(text_hash, config_hash)
+);
+
+CREATE TABLE model_registry (
+    model_name TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    dimensions INTEGER,
+    first_used TIMESTAMP,
+    last_used TIMESTAMP,
+    embedding_count INTEGER,
+    PRIMARY KEY (model_name, model_version, task_type)
 );
 ```
 
