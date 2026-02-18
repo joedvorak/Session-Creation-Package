@@ -620,18 +620,23 @@ tests/              - Test suite (planned)
 ---
 
 ### DOC-004: README Update
-**Priority**: P2 | **Status**: 🔴 Not Started
+**Priority**: P2 | **Status**: � Complete
 
-**Note**: Deferred until current version stabilizes. Current README documents legacy system which is still accurate for that code.
+**Completed**: All project READMEs updated to reflect current v2.0.0 codebase.
 
-**Sections Needed** (when ready):
-- [ ] Project overview and purpose
-- [ ] Installation instructions
-- [ ] Quick start guide
-- [ ] Configuration (API keys, Ollama setup)
-- [ ] CLI usage
-- [ ] Streamlit app usage
-- [ ] Clear note about legacy vs current files
+**Sections Updated**:
+- [x] Project overview and purpose
+- [x] Installation instructions
+- [x] Quick start guide
+- [x] Configuration (API keys, Ollama setup)
+- [x] CLI usage
+- [x] Streamlit app usage
+- [x] Clear note about legacy vs current files
+
+**Files Updated**:
+- `README.md` — Complete rewrite covering current architecture, placement strategies, quality metrics, embedding backends, database schema, benchmarking, and testing
+- `scripts/README.md` — Added benchmark scripts (run_benchmark.py, placement_benchmark.py, extract_benchmark_fixture.py)
+- `tests/README.md` — Complete rewrite reflecting implemented test suite (51 tests, fixtures, markers)
 
 ---
 
@@ -940,8 +945,9 @@ After each phase, verify:
 
 | ID | Description | Completed |
 |----|-------------|-----------|
-| PLACE-001 | Fix final filling process overloading last sessions | 2026-02-18 |
-| EMB-001 | Fix cache status display | 2026-02-12 |
+| DOC-004 | README update for v2.0.0 | 2025-02-19 |
+| PLACE-001 | Fix final filling process overloading last sessions | 2025-02-18 |
+| EMB-001 | Fix cache status display | 2025-02-12 |
 | EXP-001 | Viewer bundle filename consistency | 2026-02 |
 | EXP-002 | Session export column names | 2026-02 |
 | UI-001 | Clickable wizard steps | 2026-02 |

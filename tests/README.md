@@ -2,35 +2,45 @@
 
 Test suite for the SMART library.
 
-## Status
+## Test Files
 
-Test infrastructure is planned but not yet implemented. See BACKLOG.md items TEST-001 through TEST-005.
+| File | Tests | Coverage |
+|------|-------|----------|
+| `test_database.py` | 22 | EmbeddingCache CRUD, ConferenceDB CRUD, config hashing, batch ops |
+| `test_placement.py` | 17 | Determinism, balance, edge cases, hybrid, coherence, performance |
+| `test_placement_real.py` | 12 | Real AIM26 data: determinism, PLACE-001/002 regression, size distribution, quality |
+| `conftest.py` | — | Shared fixtures (MockEmbedder, sample presentations, embeddings) |
 
-## Planned Structure
+**Total: 51 tests** (47 pass, 2 skip for EMB-006, 2 xfail for PLACE-002)
 
-```
-tests/
-├── conftest.py          # Shared fixtures
-├── test_database.py     # EmbeddingCache and ConferenceDB tests
-├── test_embeddings.py   # Embedding backend tests
-├── test_placement.py    # Clustering algorithm tests
-├── test_metrics.py      # Metrics calculation tests
-├── test_loaders.py      # Import functionality tests
-├── test_exporters.py    # Export functionality tests
-├── fixtures/            # Sample data files
-└── mocks/               # Mock implementations
-```
+## Fixtures
+
+- `fixtures/aim26_benchmark.npz` — 1150 real conference presentations with 3072D Gemini embeddings (12.4 MB, gitignored). Generate with `python scripts/extract_benchmark_fixture.py`.
 
 ## Running Tests
 
-Once implemented:
-
 ```bash
 # Run all tests
-pytest
+python -m pytest tests/ -v
+
+# Run a specific module
+python -m pytest tests/test_placement.py -v
 
 # Run with coverage
-pytest --cov=smart --cov-report=html
+python -m pytest tests/ --cov=smart --cov-report=term-missing
+
+# Skip tests requiring the benchmark fixture
+python -m pytest tests/test_database.py tests/test_placement.py -v
 ```
+
+## Markers
+
+Custom markers defined in `pytest.ini`:
+
+- `@pytest.mark.unit` — Fast, no external dependencies
+- `@pytest.mark.integration` — Requires database or file I/O
+- `@pytest.mark.slow` — Long-running tests
+- `@pytest.mark.requires_ollama` — Requires local Ollama server
+- `@pytest.mark.requires_gemini` — Requires Gemini API key
 
 See `docs/TESTING.md` for the full testing strategy.
