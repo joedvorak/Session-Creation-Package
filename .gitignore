@@ -35,6 +35,9 @@ __pycache__/
 output/
 exports/
 
+# Test fixtures (large embedding files)
+tests/fixtures/*.npz
+
 # Presentation Data
 df_presentations.pkl
 

@@ -169,56 +169,98 @@
 ## Category: Placement Algorithm
 
 ### PLACE-001: Fix Final Filling Process Overloading Last Sessions
-**Priority**: P0 | **Status**: 🔴 Not Started
+**Priority**: P0 | **Status**: � Complete
 
-**Problem**: During the final filling process of bottom-up hierarchical clustering, most remaining presentations are being placed into the last few sessions created rather than distributed across related sessions throughout the hierarchy. This results in unbalanced session sizes with final sessions having many more presentations than intended.
+**Problem**: During the final filling process of bottom-up hierarchical clustering, most remaining presentations were being placed into the last few sessions created rather than distributed across related sessions throughout the hierarchy. This resulted in unbalanced session sizes with final sessions having many more presentations than intended.
 
-**Observed Behavior**:
-- Early sessions get reasonable sizes
-- Final sessions receive disproportionate number of presentations
-- Algorithm appears to not follow intended distribution logic during final pass
-- Some presentations go to related sessions, but most end up in final sessions
+**Root Cause**: Two issues in `_bottom_up_cluster` and `_assign_remaining_items`:
+1. A `max_session_size` override forced session creation even past `merge_stop_index`, creating extra sessions beyond the intended stop point.
+2. `_assign_remaining_items` enforced `max_session_size` and created new single-item overflow sessions when all existing sessions were full. These single-item sessions became magnets for subsequent remaining items, concentrating items in tail sessions.
 
-**Root Cause Investigation Needed**:
-- [ ] Review final filling logic in `smart/core/placement.py`
-- [ ] Trace algorithm execution with logging to identify where distribution fails
-- [ ] Compare current behavior to algorithm specification
-- [ ] Determine if this is a bug or design limitation
+**Solution** (matching legacy `create_sessions_w_hybrid` behavior):
+1. Removed the `max_session_size` override that created sessions past `merge_stop_index`. Sessions now only finalize when `i < merge_stop_index AND len(final_clusters) < max_sessions`.
+2. Changed `_assign_remaining_items` to always assign to the most similar existing cluster regardless of `max_session_size`, never creating new sessions. Items go where they semantically belong.
 
-**Acceptance Criteria**:
-- [ ] Final filling distributes presentations more evenly across related sessions
-- [ ] No session significantly larger than others without justification
-- [ ] Algorithm behavior matches documented design
+**Before/After Benchmark** (AIM26, 1150 presentations, min=8, max=12):
 
-**Files**: `smart/core/placement.py`
+| Metric | Before | After | Legacy |
+|--------|--------|-------|--------|
+| Tail/Body ratio | 1.46 (IMBALANCED) | 1.00 (BALANCED) | 0.87 |
+| Size CV | 0.221 | 0.215 | 0.264 |
+| Max size | 17 | 20 | 28 |
+| Coherence mean | 0.8644 | 0.8620 | 0.8608 |
+| Fit min | 0.7557 | 0.7827 | 0.7813 |
+| Sessions > 150% mean | 4 | 1 | 3 |
+
+**Files**: `smart/core/placement.py` — both `OralSessionPlacement` and `HybridFirstPlacement`
+
+**Completed**: 2026-02-18
 
 ---
 
 ### PLACE-002: Max Session Size Not Enforced
-**Priority**: P1 | **Status**: 🔴 Not Started
+**Priority**: P2 | **Status**: 🔵 Deferred
 
-**Problem**: The max session size parameter in the UI is not being used by the placement algorithm. The final filling process completely ignores this constraint, allowing sessions to exceed the specified maximum.
+**Problem**: The max session size parameter in the UI is not enforced as a hard limit. During the final filling phase, remaining presentations are assigned to their best-fit session regardless of size (matching legacy behavior).
+
+**Context**: PLACE-001 fix intentionally removed `max_session_size` enforcement from `_assign_remaining_items` to prevent tail-overloading. The legacy algorithm also had no max enforcement. Enforcing a hard max would require a redistribution pass after the final fill, which could hurt coherence.
 
 **Current State**:
-- UI has max session size input field
-- Parameter may be passed to placement function but not enforced
-- Final filling adds presentations without checking against max size
+- `max_session_size` is used during tree traversal to trigger early finalization
+- Final fill ignores max size (items go to most similar session)
+- Typical overshoot is modest (max 20 with target 12 on AIM26 data)
 
-**Solution Options**:
-1. **Enforce as hard limit**: Reject placements that would exceed max size
-2. **Enforce as soft limit**: Use max size as secondary constraint during optimization
-3. **Remove from UI**: If not implementable, gray out or remove the option
-
-**Immediate Action**: Gray out max session size in UI until enforcement is implemented.
+**Possible Future Approaches**:
+1. Post-fill redistribution: Move items from oversized sessions to next-best session
+2. Iterative balancing: Trade items between neighboring sessions to reduce max
+3. Soft limit with penalty: Weight similarity against session size during fill
+4. Accept as-is: Document that max_session_size is advisory, not enforced
 
 **Acceptance Criteria**:
-- [ ] Either: Max size enforced during all placement phases
-- [ ] Or: UI control disabled/hidden with explanatory tooltip
-- [ ] Algorithm documentation updated to reflect actual behavior
+- [ ] Either: Max size enforced with acceptable coherence tradeoff
+- [ ] Or: UI control relabeled as "target" with tooltip explaining behavior
 
 **Files**: 
-- `smart/core/placement.py` - Add max size enforcement
-- `apps/smart_app.py` - Disable UI control if not enforced
+- `smart/core/placement.py` - Would need post-fill balancing pass
+- `apps/smart_app.py` - Relabel UI control
+
+---
+
+### PLACE-003: Per-Session Dendrograms for Visualization and Ordering
+**Priority**: P2 | **Status**: 🔴 Not Started
+
+**Problem**: There is no way to visualize the internal structure of a session — which presentations are most similar to each other, how they cluster within the session, or what a good presentation order might be. This information is valuable both for verifying session quality and for helping organizers set presentation order.
+
+**Approach**: Recompute a linkage matrix from the session's presentation embeddings after placement (rather than extracting subtrees from the original placement linkage tree). This is the better approach because:
+1. **Simpler**: Just call `scipy.cluster.hierarchy.linkage()` on the subset of embeddings for each session. No need to store/track the original tree or handle the complexity of sessions composed from multiple tree branches.
+2. **More useful**: The resulting dendrogram directly shows within-session relationships, which is what organizers need for ordering. It closely approximates how early sessions were formed from the original tree, while remaining meaningful for later sessions that drew from multiple branches.
+3. **Data already available**: Embeddings are accessible in all three apps — `st.session_state.embeddings` in smart_app.py and session_progress_tracker.py, and the existing (but unused) `load_embeddings()` in session_viewer_app.py.
+
+**Implementation Plan**:
+
+1. **Utility function** in `smart/core/metrics.py` or new `smart/core/visualization.py`:
+   - `compute_session_dendrogram(embeddings, indices, labels)` → returns matplotlib Figure
+   - Uses `scipy.cluster.hierarchy.linkage()` + `dendrogram()` on session-subset embeddings
+   - Labels leaf nodes with presentation titles (truncated)
+   - Returns figure for embedding in Streamlit via `st.pyplot()`
+
+2. **Integration points** (in priority order):
+   - **`apps/session_viewer_app.py`** (`show_sessions_tab`): Add dendrogram when a session is selected. This is the primary organizer tool and the highest-value integration. Wire up the existing `load_embeddings()` function (currently unused).
+   - **`apps/smart_app.py`** (`_render_sessions_tab`): Add dendrogram in the session detail view. Embeddings already in session state.
+   - **`apps/session_progress_tracker.py`**: Add dendrogram in session detail. Embeddings already in session state.
+
+3. **Rendering**: `matplotlib` with `scipy.cluster.hierarchy.dendrogram()` rendered via `st.pyplot()`. Matplotlib is already used in the benchmark scripts. Consider `plotly` for interactive dendrograms as a future enhancement.
+
+**Acceptance Criteria**:
+- [ ] Selecting a session in the viewer shows a dendrogram of its presentations
+- [ ] Leaf labels show truncated presentation titles
+- [ ] Dendrogram renders correctly for sessions of size 8–20
+- [ ] Available in session_viewer_app.py and smart_app.py session detail views
+
+**Files**:
+- `smart/core/metrics.py` or `smart/core/visualization.py` - Dendrogram computation utility
+- `apps/session_viewer_app.py` - Wire up `load_embeddings()`, add dendrogram to session detail
+- `apps/smart_app.py` - Add dendrogram to `_render_sessions_tab()` session detail
 
 ---
 
@@ -898,6 +940,7 @@ After each phase, verify:
 
 | ID | Description | Completed |
 |----|-------------|-----------|
+| PLACE-001 | Fix final filling process overloading last sessions | 2026-02-18 |
 | EMB-001 | Fix cache status display | 2026-02-12 |
 | EXP-001 | Viewer bundle filename consistency | 2026-02 |
 | EXP-002 | Session export column names | 2026-02 |

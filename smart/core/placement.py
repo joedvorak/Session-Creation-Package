@@ -291,20 +291,15 @@ class OralSessionPlacement(PlacementStrategy):
             # Update count for this node
             unassigned_count[i] = left_size + right_size
             
-            # Check if we should finalize this cluster
-            # Finalize if:
-            # 1. Reached min_session_size, OR
-            # 2. Reached max_session_size (prevents oversized sessions), OR
-            # 3. About to exceed max_session_size on next merge
+            # Check if we should finalize this cluster.
+            # Stop creating sessions once merge_stop OR max_sessions is reached.
+            # This prevents tail-overloading (PLACE-001) by ensuring all
+            # remaining items are distributed to existing sessions.
             should_finalize = (
                 unassigned_count[i] >= min_session_size and 
                 i < merge_stop_index and 
                 len(final_clusters) < max_sessions
             )
-            
-            # Also finalize if we've reached max_session_size to prevent oversized sessions
-            if unassigned_count[i] >= max_session_size and len(final_clusters) < max_sessions:
-                should_finalize = True
             
             if should_finalize:
                 
@@ -343,8 +338,11 @@ class OralSessionPlacement(PlacementStrategy):
         """
         Assign remaining items to most similar existing clusters.
         
-        Respects max_session_size to avoid overfilling sessions.
-        Creates new sessions if all existing sessions are at max capacity.
+        No new sessions are created here. Each remaining item goes to
+        the cluster with the highest average similarity, regardless of
+        max_session_size. This matches the legacy behavior and prevents
+        tail-overloading (PLACE-001) where single-item overflow sessions
+        became magnets for subsequent items.
         """
         if not remaining_indices or not final_clusters:
             if remaining_indices:
@@ -352,15 +350,11 @@ class OralSessionPlacement(PlacementStrategy):
             return final_clusters
         
         for idx in remaining_indices:
-            best_cluster_idx = None
+            best_cluster_idx = 0
             best_similarity = -1
             
-            # Find cluster with highest average similarity that isn't full
+            # Find cluster with highest average similarity
             for cluster_idx, cluster_indices in enumerate(final_clusters):
-                # Skip if cluster is at max size
-                if len(cluster_indices) >= max_session_size:
-                    continue
-                    
                 if cluster_indices:
                     similarities = [similarity_matrix[idx, ci] for ci in cluster_indices]
                     avg_similarity = np.mean(similarities)
@@ -369,11 +363,7 @@ class OralSessionPlacement(PlacementStrategy):
                         best_similarity = avg_similarity
                         best_cluster_idx = cluster_idx
             
-            if best_cluster_idx is not None:
-                final_clusters[best_cluster_idx].append(idx)
-            else:
-                # All clusters are full - create a new session for overflow
-                final_clusters.append([idx])
+            final_clusters[best_cluster_idx].append(idx)
         
         return final_clusters
 
@@ -697,15 +687,13 @@ class HybridFirstPlacement(PlacementStrategy):
             
             unassigned_count[i] = left_size + right_size
             
-            # Check if we should finalize this cluster
+            # Check if we should finalize this cluster.
+            # Stop creating sessions once merge_stop OR max_sessions is reached.
             should_finalize = (
                 unassigned_count[i] >= min_session_size and 
                 i < merge_stop_index and 
                 len(final_clusters) < max_sessions
             )
-            
-            if unassigned_count[i] >= max_session_size and len(final_clusters) < max_sessions:
-                should_finalize = True
             
             if should_finalize:
                 original_indices = [filtered_to_original[pos] for pos in unassigned_leaves[i]]
@@ -737,6 +725,11 @@ class HybridFirstPlacement(PlacementStrategy):
     ) -> List[List[int]]:
         """
         Assign remaining items to most similar existing clusters.
+        
+        No new sessions are created here. Each remaining item goes to
+        the cluster with the highest average similarity, regardless of
+        max_session_size. This matches the legacy behavior and prevents
+        tail-overloading (PLACE-001).
         """
         if not remaining_indices or not final_clusters:
             if remaining_indices:
@@ -744,13 +737,10 @@ class HybridFirstPlacement(PlacementStrategy):
             return final_clusters
         
         for idx in remaining_indices:
-            best_cluster_idx = None
+            best_cluster_idx = 0
             best_similarity = -1
             
             for cluster_idx, cluster_indices in enumerate(final_clusters):
-                if len(cluster_indices) >= max_session_size:
-                    continue
-                    
                 if cluster_indices:
                     similarities = [similarity_matrix[idx, ci] for ci in cluster_indices]
                     avg_similarity = np.mean(similarities)
@@ -759,10 +749,7 @@ class HybridFirstPlacement(PlacementStrategy):
                         best_similarity = avg_similarity
                         best_cluster_idx = cluster_idx
             
-            if best_cluster_idx is not None:
-                final_clusters[best_cluster_idx].append(idx)
-            else:
-                final_clusters.append([idx])
+            final_clusters[best_cluster_idx].append(idx)
         
         return final_clusters
 
