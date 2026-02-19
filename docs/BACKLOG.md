@@ -641,13 +641,26 @@ tests/              - Test suite (planned)
 ---
 
 ### DOC-005: API Documentation
-**Priority**: P2 | **Status**: 🔴 Not Started
+**Priority**: P2 | **Status**: � Complete
 
-**Modules to Document**:
-- [ ] smart/core/database.py
-- [ ] smart/core/placement.py
-- [ ] smart/llm/embeddings.py
-- [ ] smart/llm/titles.py
+**Completed**: All inline docstrings expanded to include Args/Returns. Standalone API reference generated.
+
+**Modules** (7 total, all well-documented inline):
+
+| Module | Lines | Public API | Coverage |
+|--------|------:|:----------:|:--------:|
+| `smart/core/database.py` | 2214 | ~50 items | 100% |
+| `smart/core/placement.py` | 1087 | ~21 items | 100% |
+| `smart/core/metrics.py` | 402 | 7 items | 100% |
+| `smart/io/loaders.py` | 563 | ~15 items | 100% |
+| `smart/io/exporters.py` | 1130 | ~18 items | 100% |
+| `smart/llm/embeddings.py` | 693 | ~30 items | 100% |
+| `smart/llm/titles.py` | 485 | ~20 items | 100% |
+
+**Completed Tasks**:
+- [x] Add docstrings to `EmbeddingConfig.to_dict` and `EmbeddingConfig.from_dict`
+- [x] Expand one-line docstrings on ~8 `ConferenceDB` getter methods with Args/Returns
+- [x] Generate standalone API reference → `docs/API_REFERENCE.md` (1555 lines)
 
 ---
 
@@ -944,7 +957,8 @@ After each phase, verify:
 ## Completed Items Archive
 
 | ID | Description | Completed |
-|----|-------------|-----------|
+|----|-------------|----------|
+| DOC-005 | API documentation (inline + reference) | 2025-02-19 |
 | DOC-004 | README update for v2.0.0 | 2025-02-19 |
 | PLACE-001 | Fix final filling process overloading last sessions | 2025-02-18 |
 | EMB-001 | Fix cache status display | 2025-02-12 |

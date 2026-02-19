@@ -26,6 +26,11 @@ class EmbeddingConfig:
     dimensions: Optional[int] = None
     
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize configuration to a dictionary.
+
+        Returns:
+            Dict with keys: model_name, model_version, task_type, dimensions.
+        """
         return {
             "model_name": self.model_name,
             "model_version": self.model_version,
@@ -35,6 +40,14 @@ class EmbeddingConfig:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EmbeddingConfig":
+        """Deserialize configuration from a dictionary.
+
+        Args:
+            data: Dict with keys matching EmbeddingConfig fields.
+
+        Returns:
+            New EmbeddingConfig instance.
+        """
         return cls(**data)
     
     def config_hash(self) -> str:
@@ -340,7 +353,12 @@ class EmbeddingCache:
             conn.commit()
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
+        """Get cache statistics.
+
+        Returns:
+            Dict with keys: total_embeddings (int), models (list of model
+            registry dicts with counts and timestamps), created_at (ISO timestamp).
+        """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT COUNT(*) FROM embeddings")
             total_embeddings = cursor.fetchone()[0]
@@ -998,7 +1016,15 @@ class ConferenceDB:
             return [dict(row) for row in cursor]
     
     def get_presentation(self, abstract_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single presentation by ID, including current session assignment."""
+        """Get a single presentation by ID, including current session assignment.
+
+        Args:
+            abstract_id: The presentation's unique abstract ID.
+
+        Returns:
+            Dict of presentation fields plus session_id and presentation_fit,
+            or None if not found.
+        """
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
@@ -1014,7 +1040,12 @@ class ConferenceDB:
             return dict(row) if row else None
     
     def update_embedding_hash(self, abstract_id: str, embedding_hash: str) -> None:
-        """Update the embedding hash for a presentation."""
+        """Update the embedding hash for a presentation.
+
+        Args:
+            abstract_id: The presentation's unique abstract ID.
+            embedding_hash: New embedding configuration hash (from EmbeddingConfig.config_hash).
+        """
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -1092,7 +1123,12 @@ class ConferenceDB:
         return session_id
     
     def get_sessions(self) -> List[Dict[str, Any]]:
-        """Get all sessions with presentation counts."""
+        """Get all sessions with presentation counts.
+
+        Returns:
+            List of session dicts, each including all session table columns
+            plus a ``presentation_count`` field. Ordered by session_id.
+        """
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
@@ -1107,7 +1143,15 @@ class ConferenceDB:
             return [dict(row) for row in cursor]
     
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single session with its presentations."""
+        """Get a single session with its presentations.
+
+        Args:
+            session_id: The session's unique ID.
+
+        Returns:
+            Dict of session fields with a ``presentations`` key containing a list
+            of presentation dicts (ordered by fit descending), or None if not found.
+        """
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             
@@ -1142,7 +1186,15 @@ class ConferenceDB:
         coherence: float,
         distinctiveness: Optional[float] = None
     ) -> None:
-        """Update computed metrics for a session."""
+        """Update computed metrics for a session.
+
+        Safely converts numpy scalars to Python floats before storage.
+
+        Args:
+            session_id: The session's unique ID.
+            coherence: Mean pairwise cosine similarity within the session.
+            distinctiveness: 1 minus max similarity to any other session centroid.
+        """
         # Convert numpy scalars to Python floats to avoid SQLite serialization issues
         if hasattr(coherence, 'item'):
             coherence = coherence.item()
@@ -1305,7 +1357,13 @@ class ConferenceDB:
         return count
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get database statistics."""
+        """Get database statistics.
+
+        Returns:
+            Dict with keys: total_presentations, temp_presentations,
+            real_presentations, total_sessions, placed_presentations,
+            unplaced_presentations, created_at, db_path.
+        """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT COUNT(*) FROM presentations")
             total_presentations = cursor.fetchone()[0]
@@ -1511,7 +1569,12 @@ class ConferenceDB:
         return imported_ids
     
     def get_committees(self) -> List[Dict[str, Any]]:
-        """Get all committees."""
+        """Get all committees.
+
+        Returns:
+            List of committee dicts with keys: committee_id, name,
+            description, combined_text, embedding_hash. Ordered by committee_id.
+        """
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
@@ -1524,7 +1587,14 @@ class ConferenceDB:
             return [dict(row) for row in cursor]
     
     def get_committee(self, committee_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single committee by ID."""
+        """Get a single committee by ID.
+
+        Args:
+            committee_id: The committee's unique ID.
+
+        Returns:
+            Dict of all committee fields, or None if not found.
+        """
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
@@ -1539,7 +1609,12 @@ class ConferenceDB:
         committee_id: str,
         embedding_hash: str,
     ) -> None:
-        """Update the embedding hash for a committee."""
+        """Update the embedding hash for a committee.
+
+        Args:
+            committee_id: The committee's unique ID.
+            embedding_hash: New embedding configuration hash.
+        """
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE committees SET embedding_hash = ? WHERE committee_id = ?",
