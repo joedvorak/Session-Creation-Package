@@ -13,9 +13,22 @@ Test suite for the SMART library.
 
 **Total: 51 tests** (47 pass, 2 skip for EMB-006, 2 xfail for PLACE-002)
 
-## Fixtures
+## Fixtures & Example Data
 
-- `fixtures/aim26_benchmark.npz` — 1150 real conference presentations with 3072D Gemini embeddings (12.4 MB, gitignored). Generate with `python scripts/extract_benchmark_fixture.py`.
+Real-data regression tests (`test_placement_real.py`) load benchmark data from
+one of two sources, checked in order:
+
+1. **`fixtures/aim26_benchmark.npz`** — Pre-extracted embeddings (12.4 MB,
+   gitignored). Fastest loading. Generate with:
+   ```bash
+   python scripts/extract_benchmark_fixture.py
+   ```
+2. **`../examples/databases/AIM26_Example_*.db`** — Deidentified example
+   databases shipped with the repository. Used automatically when the `.npz`
+   is absent. No setup required on a fresh clone.
+
+On a fresh clone, all 51 tests run without skips (except 2 `xfail` for known
+bugs).
 
 ## Running Tests
 
@@ -28,9 +41,6 @@ python -m pytest tests/test_placement.py -v
 
 # Run with coverage
 python -m pytest tests/ --cov=smart --cov-report=term-missing
-
-# Skip tests requiring the benchmark fixture
-python -m pytest tests/test_database.py tests/test_placement.py -v
 ```
 
 ## Markers

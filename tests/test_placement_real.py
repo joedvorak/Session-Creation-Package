@@ -5,8 +5,12 @@ These tests use actual conference embeddings (3072-dim Gemini) to catch
 issues that synthetic data misses - particularly PLACE-001 (tail session
 overloading) and PLACE-002 (max size violations).
 
-Requires: tests/fixtures/aim26_benchmark.npz
-Generate with: python scripts/extract_benchmark_fixture.py
+Data sources (checked in order):
+1. tests/fixtures/aim26_benchmark.npz  — pre-extracted, fastest
+2. examples/databases/AIM26_Example_*.db — shipped with repository
+
+Generate .npz from example DBs (optional, for faster repeated runs):
+    python scripts/extract_benchmark_fixture.py
 
 Run with: pytest tests/test_placement_real.py -v
 """
@@ -26,9 +30,18 @@ from smart.core.placement import (
     PlacementResult,
 )
 
-# Path to fixture
+# Path to pre-extracted fixture (fastest loading)
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "aim26_benchmark.npz"
-FIXTURE_AVAILABLE = FIXTURE_PATH.exists()
+
+# Path to example databases shipped with repository
+EXAMPLE_CACHE = Path(__file__).parent.parent / "examples" / "databases" / "AIM26_Example_cache.db"
+EXAMPLE_WORKING = Path(__file__).parent.parent / "examples" / "databases" / "AIM26_Example_working.db"
+
+# Data is available if EITHER the .npz OR the example databases exist
+DATA_AVAILABLE = (
+    FIXTURE_PATH.exists()
+    or (EXAMPLE_CACHE.exists() and EXAMPLE_WORKING.exists())
+)
 
 
 # =============================================================================
@@ -38,28 +51,38 @@ FIXTURE_AVAILABLE = FIXTURE_PATH.exists()
 @pytest.fixture(scope="module")
 def aim26_data():
     """
-    Load AIM26 benchmark data from fixture file.
-    
-    Scope=module so we only load the 12 MB file once per test module.
+    Load AIM26 benchmark data.
+
+    Tries sources in order:
+    1. Pre-extracted .npz fixture (fast)
+    2. Example databases shipped with the repository (slower first time)
+
+    Scope=module so we only load once per test module.
     """
-    if not FIXTURE_AVAILABLE:
-        pytest.skip("Fixture not found. Run: python scripts/extract_benchmark_fixture.py")
-    
-    data = np.load(str(FIXTURE_PATH), allow_pickle=False)
-    
-    abstract_ids = data["abstract_ids"].tolist()
-    embeddings = data["embeddings"]
-    hybrid_keys = data["hybrid_keys"].tolist()
-    hybrid_values = data["hybrid_values"].tolist()
-    hybrid_assignments = dict(zip(hybrid_keys, hybrid_values))
-    invited_ids = set(data["invited_ids"].tolist())
-    
-    return {
-        "abstract_ids": abstract_ids,
-        "embeddings": embeddings,
-        "hybrid_assignments": hybrid_assignments,
-        "invited_ids": invited_ids,
-    }
+    if FIXTURE_PATH.exists():
+        # Fast path: load from pre-extracted .npz
+        data = np.load(str(FIXTURE_PATH), allow_pickle=False)
+
+        return {
+            "abstract_ids": data["abstract_ids"].tolist(),
+            "embeddings": data["embeddings"],
+            "hybrid_assignments": dict(
+                zip(data["hybrid_keys"].tolist(), data["hybrid_values"].tolist())
+            ),
+            "invited_ids": set(data["invited_ids"].tolist()),
+        }
+
+    if EXAMPLE_CACHE.exists() and EXAMPLE_WORKING.exists():
+        # Slower path: load directly from example databases
+        from scripts.placement_benchmark import load_benchmark_data
+
+        return load_benchmark_data(str(EXAMPLE_CACHE), str(EXAMPLE_WORKING))
+
+    pytest.skip(
+        "No benchmark data available. "
+        "Ensure examples/databases/ is present or run: "
+        "python scripts/extract_benchmark_fixture.py"
+    )
 
 
 @pytest.fixture
@@ -94,7 +117,7 @@ def hybrid_result(aim26_data, standard_constraints):
 # Determinism Tests on Real Data
 # =============================================================================
 
-@pytest.mark.skipif(not FIXTURE_AVAILABLE, reason="Benchmark fixture not available")
+@pytest.mark.skipif(not DATA_AVAILABLE, reason="Benchmark data not available")
 class TestRealDataDeterminism:
     """Verify placement is deterministic on real conference data."""
     
@@ -128,7 +151,7 @@ class TestRealDataDeterminism:
 # PLACE-001: Tail Session Overloading
 # =============================================================================
 
-@pytest.mark.skipif(not FIXTURE_AVAILABLE, reason="Benchmark fixture not available")
+@pytest.mark.skipif(not DATA_AVAILABLE, reason="Benchmark data not available")
 class TestPlace001TailBehavior:
     """
     Detect the tail-overloading bug with real data.
@@ -181,7 +204,7 @@ class TestPlace001TailBehavior:
 # PLACE-002: Max Session Size Enforcement
 # =============================================================================
 
-@pytest.mark.skipif(not FIXTURE_AVAILABLE, reason="Benchmark fixture not available")
+@pytest.mark.skipif(not DATA_AVAILABLE, reason="Benchmark data not available")
 class TestPlace002MaxSizeEnforcement:
     """Verify max_session_size is respected on real data."""
     
@@ -208,7 +231,7 @@ class TestPlace002MaxSizeEnforcement:
 # Size Distribution Tests
 # =============================================================================
 
-@pytest.mark.skipif(not FIXTURE_AVAILABLE, reason="Benchmark fixture not available")
+@pytest.mark.skipif(not DATA_AVAILABLE, reason="Benchmark data not available")
 class TestRealDataSizeDistribution:
     """Verify reasonable session size distribution on real data."""
     
@@ -268,7 +291,7 @@ class TestRealDataSizeDistribution:
 # Hybrid Session Tests
 # =============================================================================
 
-@pytest.mark.skipif(not FIXTURE_AVAILABLE, reason="Benchmark fixture not available")
+@pytest.mark.skipif(not DATA_AVAILABLE, reason="Benchmark data not available")
 class TestRealDataHybrid:
     """Test hybrid session handling on real data."""
     
@@ -296,7 +319,7 @@ class TestRealDataHybrid:
 # Quality Metrics (informational, not strict assertions)
 # =============================================================================
 
-@pytest.mark.skipif(not FIXTURE_AVAILABLE, reason="Benchmark fixture not available")
+@pytest.mark.skipif(not DATA_AVAILABLE, reason="Benchmark data not available")
 class TestRealDataQuality:
     """Quality checks on real data placement."""
     

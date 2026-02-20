@@ -535,6 +535,50 @@ Similar to DATA-003 but for committees.
 
 ---
 
+### TEST-007: Add Deidentified Example Data and Enable Regression Tests on Fresh Clone
+**Priority**: P1 | **Status**: � Complete
+
+**Problem**: The repository cannot run the 12 real-data regression tests (`test_placement_real.py`) on a fresh clone because the benchmark fixture (`tests/fixtures/aim26_benchmark.npz`) and its source databases are all gitignored. New users also have no example data to verify their installation works end-to-end.
+
+**Solution**: Create an `examples/` directory containing deidentified AIM26 conference data. Modify the regression test fixture to fall back to loading directly from the example databases when the `.npz` file is absent.
+
+**Implementation Summary**:
+
+1. Created `examples/` directory with deidentified data (37 MB total, no spaces in filenames):
+   - `databases/AIM26_Example_cache.db` — 1,234 embeddings (3072-dim, gemini-embedding-001)
+   - `databases/AIM26_Example_working.db` — 1,160 presentations, 97 sessions (6 hybrid)
+   - `submissions/AIM26_Example_Submission_Data.xlsx` — raw submission data
+   - `hybrid/AIM26_Example_Hybrid_Sessions.xlsx` — hybrid pre-assignments
+   - `exports/20260220/` — full organizer export (parquet + metadata)
+   - `exports/20260220_presenter_list.xlsx` and `exports/20260220_room_assignment.xlsx`
+2. Created `examples/README.md` documenting provenance, deidentification, and usage.
+3. Updated `.gitignore` with negation rules (`!examples/**`, `!examples/**/*.db`, etc.) and anchored `output/` and `exports/` to root with leading `/`.
+4. Updated `tests/test_placement_real.py`:
+   - Added `EXAMPLE_CACHE` and `EXAMPLE_WORKING` paths
+   - Changed `FIXTURE_AVAILABLE` → `DATA_AVAILABLE` (checks .npz OR example DBs)
+   - Modified `aim26_data` fixture with DB fallback via `load_benchmark_data()`
+   - Updated all 6 `skipif` decorators to use `DATA_AVAILABLE`
+5. Updated `scripts/extract_benchmark_fixture.py` to prefer production DBs, fall back to example DBs.
+6. Updated `tests/README.md` and `docs/TESTING.md`.
+
+**Test Results** (without .npz, using DB fallback):
+- 51 collected, 47 passed, 2 skipped (EMB-006), 2 xfailed (PLACE-002)
+- Zero skips for missing fixture data
+- Completed in 24s
+
+**Acceptance Criteria**:
+- [x] `examples/` directory committed with all deidentified data (~37 MB)
+- [x] `examples/README.md` documents data provenance and deidentification
+- [x] `python -m pytest tests/ -v` on a fresh clone runs all 51 tests (0 skipped for missing fixture)
+- [x] `test_placement_real.py` loads from example DBs when `.npz` is absent
+- [x] `.npz` generation still works via `python scripts/extract_benchmark_fixture.py`
+- [x] No spaces in committed filenames
+- [x] No PII in any committed file
+
+**Completed**: 2026-02-20
+
+---
+
 ## Category: Documentation & Project Organization
 
 ### DOC-001: Create ARCHITECTURE.md

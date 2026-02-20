@@ -32,8 +32,8 @@ __pycache__/
 *.db
 
 # Output files
-output/
-exports/
+/output/
+/exports/
 
 # Test fixtures (large embedding files)
 tests/fixtures/*.npz
@@ -46,3 +46,15 @@ dist/
 build/
 *.spec
 __pycache__/
+
+# =============================================================================
+# Deidentified example data — committed to the repository
+# =============================================================================
+# The extension-based rules above (*.db, *.xlsx, *.json) and the directory
+# rules (/exports/) would block these files. Negation rules below override
+# them so the examples/ directory is fully tracked.
+!examples/
+!examples/**
+!examples/**/*.db
+!examples/**/*.xlsx
+!examples/**/*.json

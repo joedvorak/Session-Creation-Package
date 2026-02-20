@@ -44,17 +44,27 @@ Full workflow validation.
 tests/
 ├── conftest.py              # Shared fixtures
 ├── test_database.py         # EmbeddingCache and ConferenceDB tests
+├── test_placement.py        # Clustering algorithm tests (synthetic data)
+├── test_placement_real.py   # Regression tests (real AIM26 data)
 ├── test_embeddings.py       # Embedding backend tests
-├── test_placement.py        # Clustering algorithm tests
 ├── test_metrics.py          # Coherence/distinctiveness tests
 ├── test_loaders.py          # Import functionality tests
 ├── test_exporters.py        # Export functionality tests
-├── fixtures/
-│   ├── sample_presentations.csv
-│   ├── sample_committees.csv
-│   └── sample_hybrid.csv
-└── mocks/
-    └── mock_embedder.py     # Deterministic embedding backend
+└── fixtures/
+    └── aim26_benchmark.npz  # Optional: pre-extracted for speed (gitignored)
+
+examples/                    # Deidentified AIM26 data (committed to repo)
+├── databases/               # Embedding cache + conference DB
+├── submissions/             # Raw submission spreadsheet
+├── hybrid/                  # Hybrid session pre-assignments
+└── exports/                 # Full organizer export
+```
+
+**Real-data tests** (`test_placement_real.py`) automatically load from the
+example databases shipped in `examples/databases/`. No manual setup is needed
+on a fresh clone. For faster repeated runs, generate the `.npz` fixture:
+```bash
+python scripts/extract_benchmark_fixture.py
 ```
 
 ### Dependencies

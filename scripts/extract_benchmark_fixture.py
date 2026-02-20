@@ -24,8 +24,29 @@ from scripts.placement_benchmark import load_benchmark_data
 
 
 def main():
-    cache_db = PROJECT_ROOT / "databases" / "AIM26-T2_cache.db"
-    working_db = PROJECT_ROOT / "databases" / "AIM26-T2_working.db"
+    # Production databases (original, not committed to repo)
+    prod_cache = PROJECT_ROOT / "databases" / "AIM26-T2_cache.db"
+    prod_working = PROJECT_ROOT / "databases" / "AIM26-T2_working.db"
+
+    # Example databases (deidentified, shipped with repo)
+    example_cache = PROJECT_ROOT / "examples" / "databases" / "AIM26_Example_cache.db"
+    example_working = PROJECT_ROOT / "examples" / "databases" / "AIM26_Example_working.db"
+
+    # Prefer production databases, fall back to examples
+    if prod_cache.exists() and prod_working.exists():
+        cache_db = prod_cache
+        working_db = prod_working
+        print("Using production databases")
+    elif example_cache.exists() and example_working.exists():
+        cache_db = example_cache
+        working_db = example_working
+        print("Using example databases")
+    else:
+        print("ERROR: No databases found.")
+        print(f"  Checked: {prod_cache}")
+        print(f"  Checked: {example_cache}")
+        sys.exit(1)
+
     output_dir = PROJECT_ROOT / "tests" / "fixtures"
     
     print("Loading data from databases...")
