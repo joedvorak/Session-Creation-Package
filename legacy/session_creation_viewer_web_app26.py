@@ -4,27 +4,26 @@ import pandas as pd
 import hmac
 import cryptpandas as crp
 
-PRES_SIMILARITIES_MATRIX_PATH = 'pres_similarities_matrixAIM25.parquet'
-SESSION_SIMILARITIES_MATRIX_PATH = 'session_similarities_matrixAIM25.parquet'
-NO_ABSTRACT_PRES_DATA_PATH = 'df_no_abstractAIM25.parquet'
-ENCRYPTED_PRES_DATA_PATH = 'encrypted_df.crypt'
-SESSION_DATA_PATH = 'df_sessionsAIM25.parquet'
-
+PRES_SIMILARITIES_MATRIX_PATH = 'pres_similarities_matrixAIM26.parquet'
+SESSION_SIMILARITIES_MATRIX_PATH = 'session_similarities_matrixAIM26.parquet'
+NO_ABSTRACT_PRES_DATA_PATH = 'df_no_abstractAIM26.parquet'
+ENCRYPTED_PRES_DATA_PATH = 'encrypted_dfAIM26.crypt'
+SESSION_DATA_PATH = 'df_sessionsAIM26.parquet'
 st.set_page_config(
-    page_title="AIM 2025 Presentation Similarity",
+    page_title="AIM 2026 Presentation Similarity",
     page_icon=":material/category_search:",
     layout="wide",
 )
 
-st.title("ASABE AIM 2025 Presentation and Session Similarity Exploration Tool")
+st.title("ASABE AIM 2026 Presentation and Session Similarity Exploration Tool")
 
 st.markdown("""
-This tool allows you to explore the similarity between presentations and sessions at the ASABE AIM 2025 conference. 
+This tool allows you to explore the similarity between presentations and sessions at the ASABE AIM 2026 conference. 
 You can view presentations, sessions, and how similar they are to each other based on their content.
 Similarity is based on the title and abstract of each presentation, using [Google's Gemini Embedding Model](https://ai.google.dev/gemini-api/docs/models#gemini-embedding) to calculate cosine similarity scores.
 
-**Note:** The abstracts are encrypted for security. You must enter the correct password to view them. 
-The password is provided by the ASABE AIM 2025 organizers. If you do not have it, please contact them.
+**Note:** Some presentation information is encrypted for security. You must enter the correct password to view this data. 
+The password is provided by the ASABE AIM 2026 organizers. If you do not have it, please contact them.
 """)
 
 # Password Check to unlock abstracts.
@@ -192,11 +191,12 @@ with tab_pres:
         st.write(
             "The leftmost column is a checkbox column. Click to select a presentation. This may blend with the background on dark themes."
         )
-
+    st.write(f"Rows loaded: {len(df_presentations)}")
+    st.write(f"Rows with missing Abstract ID: {df_presentations['Abstract ID'].isna().sum()}")
     event = st.dataframe(
         df_presentations,
         use_container_width=True,
-        hide_index=True,
+        hide_index=False,
         column_config={
             "Abstract ID": st.column_config.NumberColumn(format="%i"),
             "Presentation Session Fit": st.column_config.NumberColumn(
@@ -216,7 +216,7 @@ with tab_pres:
             event.selection.rows
         ]  # Create a dataframe from the selected presentation row.
         st.write(
-            selected_pres.iloc[0]["Presentation Title"]
+            selected_pres.iloc[0]["Title"]
         )  # It is necessary to request the first row, [0], since it is a dataframe and not just one entry.
         st.header("Most Similar Presentations")
         similar_presentations = df_similarity.loc[
@@ -233,7 +233,7 @@ with tab_pres:
         st.dataframe(
             similar_df,
             use_container_width=True,
-            hide_index=True,
+            hide_index=False,
             column_config={
                 "Abstract ID": st.column_config.NumberColumn(format="%i"),
                 "presentation_session_fit": None,
@@ -244,22 +244,21 @@ with tab_pres:
         )
 with tab_session:
     st.header("Sessions")
-    cluster_session_sizes_df = df_sessions["Session Size"]
-    cluster_session_sizes_df.index.name = 'Session Name'  # Set the index name for better labeling
-    cluster_session_sizes_df.index = df_sessions['Session Name']  # Ensure the index is set to the session names
+    cluster_session_sizes_df = df_sessions["session_size"]
+    cluster_session_sizes_df.index.name = 'Session Number'  # Set the index name for better labeling
+    cluster_session_sizes_df.index = df_sessions['cluster_id']  # Ensure the index is set to the session names
     cluster_session_sizes_df = cluster_session_sizes_df.rename("Presentations Count")
     cluster_session_sizes_df.sort_index(inplace=True)  # Sort the index for better visualization
     st.subheader("Session Size Distribution") 
-    st.bar_chart(cluster_session_sizes_df, x_label="Session Name", y_label="Presentations Count") 
+    st.bar_chart(cluster_session_sizes_df, x_label="Session Number", y_label="Presentations Count") 
 
-    cluster_session_sim_df = df_sessions["Session Coherence"]
-    cluster_session_sim_df.index.name = 'Session Name'  # Set the index name for better labeling
-    cluster_session_sim_df.index = df_sessions['Session Name']  # Ensure the index is set to the session names
+    cluster_session_sim_df = df_sessions["session_coherence"]
+    cluster_session_sim_df.index.name = 'Session Number'  # Set the index name for better labeling
+    cluster_session_sim_df.index = df_sessions['cluster_id']  # Ensure the index is set to the session names
     cluster_session_sim_df = cluster_session_sim_df.rename("Session Coherence Score")
     cluster_session_sim_df.sort_index(inplace=True)  # Sort the index for better visualization
     st.subheader("Session Coherence Distribution") 
-    st.bar_chart(cluster_session_sim_df, x_label="Session Name", y_label="Session Coherence Score")
-
+    st.bar_chart(cluster_session_sim_df, x_label="Session Number", y_label="Session Coherence Score")
 
     with st.expander("**Instructions** Click to expand"):
         st.write(
@@ -270,8 +269,8 @@ with tab_session:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Session Coherence": st.column_config.NumberColumn(format="%.3f"),
-            "Session Std Dev": st.column_config.NumberColumn(format="%.3f"),
+            "session_coherence": st.column_config.NumberColumn(format="%.3f"),
+            "session_std_dev": st.column_config.NumberColumn(format="%.3f"),
         },
         on_select="rerun",
         selection_mode="single-row",
@@ -282,13 +281,13 @@ with tab_session:
         selected_session_df = df_sessions.iloc[
             event_session.selection.rows
         ]  # Create a dataframe from the selected session row.
-        selected_session = selected_session_df.iloc[0]["Session Name"]
+        selected_session = selected_session_df.iloc[0]["cluster_id"]
         st.subheader(selected_session)
         st.write(
-            f"**Session Coherence:** {selected_session_df.iloc[0]['Session Coherence']:.3f}"
+            f"**Session Coherence:** {selected_session_df.iloc[0]['session_coherence']:.3f}"
         )
         df_selected_session = df_presentations[
-            df_presentations["Session"] == selected_session
+            df_presentations["Session Code"] == selected_session
         ]
         if (
             "Abstract" in df_selected_session
@@ -301,7 +300,7 @@ with tab_session:
                     "Presentation Session Fit",
                     "Presentation Standardized Deviation",
                     "Abstract ID",
-                    "Presentation Title",
+                    "Title",
                     "Abstract",
                 ],
                 column_config={
@@ -309,7 +308,7 @@ with tab_session:
                     "Presentation Session Fit": st.column_config.NumberColumn(
                         format="%.3f"
                     ),
-                    "Session Std Dev": None,
+                    "session_std_dev": None,
                     "Presentation Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
                     "Presentation Standardized Deviation": st.column_config.NumberColumn(
                         format="%.3f"
@@ -325,14 +324,14 @@ with tab_session:
                     "Presentation Session Fit",
                     "Presentation Standardized Deviation",
                     "Abstract ID",
-                    "Presentation Title",
+                    "Title",
                 ],
                 column_config={
                     "Abstract ID": st.column_config.NumberColumn(format="%i"),
                     "Presentation Session Fit": st.column_config.NumberColumn(
                         format="%.3f"
                     ),
-                    "Session Std Dev": None,
+                    "session_std_dev": None,
                     "Presentation Raw Deviation": st.column_config.NumberColumn(format="%.3f"),
                     "Presentation Standardized Deviation": st.column_config.NumberColumn(
                         format="%.3f"

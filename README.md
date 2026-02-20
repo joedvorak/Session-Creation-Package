@@ -1,208 +1,220 @@
-# Automated Technical Session Creation Package
+# SMART — Session Matching And Automated Recommendation Tool
 
-This repository contains a comprehensive suite of tools for automatically creating and organizing technical sessions for academic conferences using AI-powered similarity analysis. The system uses machine learning embeddings to group presentations by topic similarity, supports hybrid sessions with pre-assigned invited speakers, and provides interactive tools for session analysis and visualization.
+A tool suite for automatically creating and organizing technical sessions for academic conferences using AI-powered similarity analysis. SMART uses embedding models to group presentations by topic similarity, supports hybrid sessions with pre-assigned invited speakers, and provides interactive tools for session review and visualization.
 
-## 🚀 Overview
+Developed for the ASABE (American Society of Agricultural and Biological Engineers) Annual International Meeting, but designed to generalize to other academic conferences.
 
-The Session Creation Package automates the traditionally manual process of organizing conference presentations into thematic sessions. It leverages state-of-the-art sentence transformer models to:
+## Overview
 
-- **Generate semantic embeddings** from presentation titles and abstracts
-- **Cluster presentations** into coherent thematic sessions
-- **Support hybrid sessions** with pre-assigned invited presentations
-- **Analyze session quality** using multiple similarity metrics
-- **Generate session titles and keywords** using large language models
-- **Match sessions to committees** based on topic similarity
-- **Provide interactive visualization** tools for session exploration
+SMART automates the traditionally manual process of organizing conference presentations into thematic sessions:
 
-## 📁 Repository Structure
+1. **Import** presentation titles and abstracts from CSV/Excel
+2. **Embed** text using Gemini, Ollama, or SentenceTransformers
+3. **Cluster** presentations into coherent sessions via hierarchical clustering
+4. **Fill hybrid sessions** with pre-assigned invited speakers, topped up with similar content
+5. **Generate titles** and keywords for sessions using LLMs
+6. **Match sessions to committees** for review assignment
+7. **Export** for organizer review or cloud-based viewer
 
-### Core Programs
+## Repository Structure
 
-#### 🔧 `session_organizer.py`
-The main algorithmic engine containing all core functionality:
+```
+smart/                          # Core library (v2.0)
+├── core/
+│   ├── database.py             # SQLite persistence (EmbeddingCache, ConferenceDB)
+│   ├── placement.py            # Session assignment algorithms
+│   └── metrics.py              # Session quality metrics
+├── io/
+│   ├── loaders.py              # File loading with column mapping
+│   └── exporters.py            # Export with redaction profiles
+└── llm/
+    ├── embeddings.py           # Gemini, Ollama, SentenceTransformers backends
+    └── titles.py               # LLM title/keyword generation
 
-- **Data Loading Functions**: Load presentations, hybrid sessions, and committee data from Excel/CSV files
-- **Embedding Generation**: Create semantic embeddings using SentenceTransformer models
-- **Duplicate Detection**: Remove near-duplicate presentations based on similarity thresholds
-- **Session Creation**: Advanced hierarchical clustering with hybrid session support
-- **Quality Analysis**: Calculate session coherence, distinctiveness, and presentation-session fit metrics
-- **Content Generation**: Generate session titles and keywords using Ollama, local LLaMA, or Gemini models
-- **Committee Matching**: Find relevant committees for each session based on topic similarity
+apps/                           # Streamlit applications
+├── smart_app.py                # Main session creation wizard
+├── session_viewer_app.py       # Read-only session/presentation viewer
+└── session_progress_tracker.py # Progress tracking from existing assignments
 
-#### 🖥️ `session_creation_app_v2.py`
-GUI desktop application for interactive session creation:
+scripts/                        # CLI tools and utilities
+├── smart_cli.py                # End-to-end pipeline CLI
+├── migrate_data.py             # Import legacy data into SQLite
+├── run_benchmark.py            # Placement strategy benchmarking
+├── placement_benchmark.py      # Benchmark framework (metrics, reports)
+└── extract_benchmark_fixture.py # Extract test data from databases
 
-- **File Management**: Load presentation data, hybrid sessions, and committee information
-- **Model Selection**: Choose from multiple embedding models (MiniLM, MPNet, CDE, etc.)
-- **Parameter Configuration**: Adjust clustering parameters, similarity thresholds, and session constraints
-- **Real-time Processing**: Live output capture and progress monitoring
-- **Export Options**: Save results in multiple formats (CSV, Parquet, encrypted)
-- **Session Analysis**: Built-in quality metrics and visualization
+tests/                          # pytest test suite
+├── conftest.py                 # Shared fixtures
+├── test_database.py            # EmbeddingCache and ConferenceDB tests
+├── test_placement.py           # Placement algorithm tests (synthetic data)
+├── test_placement_real.py      # Real-data regression tests (AIM26)
+└── fixtures/                   # Test data (*.npz, gitignored)
 
-#### 🌐 `session_creation_viewer_web_app.py`
-Streamlit web application for session exploration and analysis:
+notebooks/                      # Jupyter notebooks
+└── SMART_Demo.ipynb            # Interactive demo of the SMART library
 
-- **Interactive Visualization**: Explore presentation and session similarities
-- **Secure Access**: Password-protected abstract viewing
-- **Similarity Metrics**: Detailed explanations of all quality measures
-- **Data Filtering**: Search and filter sessions and presentations
-- **Export Capabilities**: Download filtered results and analysis reports
-
-#### 📊 `session creation operation.ipynb`
-Comprehensive Jupyter notebook demonstrating the complete workflow:
-
-- **Step-by-step Examples**: Complete workflows for different scenarios
-- **Hybrid Session Integration**: Adding invited presentations to generated sessions
-- **Quality Analysis**: Detailed session evaluation and metrics calculation
-- **Comparison Studies**: Analyze algorithm-generated vs. manually-edited sessions
-- **Data Export**: Prepare data for web visualization and sharing
-
-### Data Files
-
-#### Input Data Examples
-*These raw data files are not provided in the public repository. The notebook data processing example references these files, so this is a description of what is in each file.*
-- **`1.29.25 Abstracts.xlsx/csv`**: Sample presentation data with titles, abstracts, and metadata
-- **`Example Hybrid Session Invited Presentations.csv`**: Pre-assigned presentations for hybrid sessions
-- **`ASABE Committees.csv`**: Committee information for session matching
-- **`Presentations - Manual Placement.csv`**: Manually edited session assignments for comparison
-
-#### Output Data Examples
-*These example files are not in the public repository but are produced by the processing steps.*
-##### Outputs Files for Human Organizers
-- **`created_sessions.csv`**: Generated session assignments and metadata
-- **`normal_presentations_processed.csv`**: Processed presentation data with session assignments
-##### Output Files for the Streamlit Web Application
-- **`df_sessions.parquet`**: Session metadata and statistics
-- **`pres_similarities_matrix.parquet`**: Presentation-to-presentation similarity matrix
-- **`session_similarities_matrix.parquet`**: Session-to-session similarity matrix
-- **`encrypted_df.crypt`**: Encrypted full dataset with sensitive information
-
-### Supporting Files
-- **`Automated Technical Session Creation Flyer.html`**: Project documentation and flyer
-#### Additional Files
-- **`llama-3.2-3b-instruct-q8_0.gguf`**: Local LLaMA model for title generation. 
-*Necessary for local title generation using SentenceTransformers instead of Ollama. Sentence Transformers can also automatically download if not in the local directory. It is not included, but can be downloaded from Hugging Face.*
-- **`.env`**: Environment variables for API keys and passwords. 
-*Necessary to create the encryted dataframes for the Streamlit Web Application or to use Gemini to create session titles.*
-
-
-## 🔧 Installation & Setup
-
-### Prerequisites
-```bash
-pip install pandas numpy scikit-learn sentence-transformers
-pip install streamlit tkinter cryptpandas python-dotenv
-pip install google-genai requests pydantic
+databases/                      # SQLite databases (gitignored)
+data/                           # Input data (submissions, committees, hybrid)
+output/                         # Generated output (sessions, bundles, benchmarks)
+legacy/                         # Deprecated v1.x code (reference only)
+docs/                           # Architecture, backlog, roadmap
 ```
 
-### Environment Configuration
-Create a `.env` file with:
+## Installation
+
+### Requirements
+
+Python 3.10+ recommended. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Core dependencies: `numpy`, `pandas`, `scipy`, `scikit-learn`, `streamlit`, `google-genai`, `sentence-transformers`, `python-dotenv`, `tqdm`.
+
+### Environment Setup
+
+Create a `.env` file in the project root:
+
 ```env
 GOOGLE_API_KEY=your_gemini_api_key
-DATAFRAME_PW=your_encryption_password
 ```
 
-### Optional: Ollama Setup
-For local LLM title generation with Ollama:
+The Gemini API key is required for embedding generation (gemini-embedding-001) and title generation. Free tier is sufficient for typical conference volumes (~1000 presentations).
+
+### Optional: Ollama for Local LLMs
+
+For local embedding and title generation without API keys:
+
 1. Install [Ollama](https://ollama.ai/)
-2. Run: `ollama pull llama3.2:latest`
-3. Start server: `ollama serve`
+2. Pull a model: `ollama pull nomic-embed-text` (embeddings) or `ollama pull llama3.2` (titles)
+3. Ollama serves automatically after installation
 
-## 🚀 Usage Examples
+## Quick Start
 
-### Basic Session Creation (GUI)
+### Streamlit App (Recommended)
+
+The main workflow is a guided wizard:
+
 ```bash
-python session_creation_app_v2.py
+streamlit run apps/smart_app.py
 ```
-1. Load presentation data (Excel/CSV)
-2. Select embedding model
-3. Configure session parameters
-4. Run session creation
-5. Export results
 
-### Command Line Processing (Notebook)
-Open `session creation operation.ipynb` and follow the step-by-step workflow for:
-- Standard session creation
-- Hybrid session integration
-- Manual placement analysis
-- Quality metrics calculation
+Steps: Conference Setup → Import Presentations → Generate Embeddings → Create Sessions → Generate Titles → Match Committees → Review & Export
 
-### Web Visualization
+### CLI Pipeline
+
+For scripted or batch processing:
+
 ```bash
-streamlit run session_creation_viewer_web_app.py
+python scripts/smart_cli.py \
+    -p data/submissions/Submissions.csv \
+    -H data/hybrid/hybrid_sessions.csv \
+    -c data/committees/ASABE\ Committees.csv \
+    -o output/ \
+    -n AIM2026 \
+    -y 26 \
+    --min-size 9 \
+    --max-size 12
 ```
-Explore generated sessions with interactive similarity analysis.
 
-## 📊 Key Features
+### Session Viewer
 
-### Advanced Clustering Algorithm
-- **Hierarchical clustering** with automatic cluster merging
-- **Hybrid session support** with pre-assigned presentations
-- **Size constraints** for minimum/maximum session sizes
-- **Quality optimization** based on similarity metrics
+To explore sessions after creation:
+
+```bash
+streamlit run apps/session_viewer_app.py
+```
+
+Load a viewer bundle directory (exported from the main app) containing parquet files and optional embeddings.
+
+## Applications
+
+| App | Purpose | Launch |
+|-----|---------|--------|
+| `smart_app.py` | Full session creation wizard | `streamlit run apps/smart_app.py` |
+| `session_viewer_app.py` | Read-only session explorer | `streamlit run apps/session_viewer_app.py` |
+| `session_progress_tracker.py` | Track progress from existing assignments | `streamlit run apps/session_progress_tracker.py` |
+
+## Core Concepts
+
+### Placement Strategies
+
+SMART provides multiple session creation algorithms:
+
+| Strategy | Description |
+|----------|-------------|
+| `OralSessionPlacement` | Bottom-up hierarchical clustering. Finalizes sessions when clusters reach minimum size, allowing popular topics to spawn multiple sessions. |
+| `HybridFirstPlacement` | Same as oral, but fills pre-assigned hybrid sessions with similar content first. |
+| `TraditionalClusterPlacement` | Standard fcluster cut at a fixed tree level. Provided for comparison. |
+| `PosterThematicOrdering` | Orders posters by similarity without session boundaries. |
 
 ### Quality Metrics
-- **Session Coherence**: Average similarity within sessions
-- **Session Distinctiveness**: Uniqueness compared to other sessions  
-- **Presentation-Session Fit**: How well presentations match their assigned session
-- **Silhouette Analysis**: Overall clustering quality assessment
 
-### Multi-Model Embedding Support for Similarity Analysis
-- **SentenceTransformers**: all-MiniLM-L6-v2, all-mpnet-base-v2, paraphrase-MiniLM-L6-v2
-- **Specialized Models**: cde-small-v1/v2 for academic content
-- **Custom Models**: Support for any HuggingFace compatible model
+| Metric | Description |
+|--------|-------------|
+| **Session Coherence** | Mean pairwise cosine similarity within a session (higher = more focused) |
+| **Session Distinctiveness** | Silhouette score measuring separation from other sessions |
+| **Presentation Fit** | How well each presentation matches its assigned session |
 
-### Content Generation
-- **Session Titles**: AI-generated descriptive titles
-- **Keywords**: Relevant topic keywords for each session
-- **Multiple LLM Options**: Ollama, local LLaMA, or Gemini API
+### Embedding Backends
 
-### Data Security
-- **Encryption Support**: Sensitive data encrypted with cryptpandas
-- **Abstract Removal**: Generate public datasets without sensitive content
-- **Password Protection**: Secure access to full datasets
+| Backend | Model Example | Dimensions | Notes |
+|---------|--------------|------------|-------|
+| Gemini | `gemini-embedding-001` | 3072 | Highest quality, requires API key |
+| Ollama | `nomic-embed-text` | 768 | Local, no API key |
 
-## 🎯 Use Cases
+### Database Schema
 
-### Academic Conferences
-- Automatically organize submitted abstracts into thematic sessions
-- Integrate invited speaker presentations into appropriate sessions
-- Generate meaningful session titles and keywords
-- Match sessions to relevant review committees
+SMART uses two SQLite databases per conference:
 
-### Workshop Organization
-- Cluster presentations by topic similarity
-- Ensure balanced session sizes
-- Identify potential session chairs based on expertise
-- Create coherent presentation sequences
+- **`*_cache.db`**: Embedding cache keyed by text hash + model config. Prevents re-computation.
+- **`*_working.db`**: Conference data — presentations, sessions, placements, committees, metrics.
 
-### Research Analysis
-- Analyze topic clustering in academic fields
-- Compare algorithmic vs. manual organization approaches
-- Study presentation similarity patterns
-- Evaluate clustering quality across different domains
+## Benchmarking
 
-## 📈 Quality Assurance
+Compare placement strategies on real conference data:
 
-The system includes comprehensive quality metrics to evaluate session organization:
+```bash
+python scripts/run_benchmark.py \
+    --strategies hybrid_first oral traditional legacy \
+    --merge-stops 0.90 0.95 0.98
+```
 
-- **Coherence Analysis**: Measure topical focus within sessions
-- **Distinctiveness Scoring**: Ensure sessions cover different topics
-- **Fit Assessment**: Evaluate individual presentation placement
-- **Comparative Analysis**: Compare algorithmic vs. manual approaches
+Generates an HTML report with comparison tables and plots (session size distribution, coherence by creation order, fit distribution). Reports are self-contained with embedded images.
 
-## 🤝 Contributing
+## Testing
 
-This package was developed for the ASABE (American Society of Agricultural and Biological Engineers) conference organization but is designed to be generalizable to other academic conferences and events.
+```bash
+# Run all tests
+python -m pytest tests/ -v
 
-## 📄 License
+# Run specific test module
+python -m pytest tests/test_placement.py -v
 
-This project is developed for academic and conference organization purposes. Please ensure appropriate attribution when using or modifying the code.
+# Run with coverage
+python -m pytest tests/ --cov=smart --cov-report=term-missing
+```
 
-## 📞 Support
+Test suite: 51 tests covering database operations, placement algorithms (synthetic and real data), determinism, and session quality metrics.
 
-For questions, issues, or feature requests, please refer to the documentation in the Jupyter notebook or examine the example workflows provided in the repository.
+## Documentation
 
----
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture and module design
+- [docs/BACKLOG.md](docs/BACKLOG.md) — Issue tracker and feature backlog
+- [docs/ROADMAP.md](docs/ROADMAP.md) — Development phases and milestones
+- [docs/TESTING.md](docs/TESTING.md) — Test strategy and conventions
 
-*This package represents a comprehensive solution for automated technical session creation, combining state-of-the-art NLP techniques with practical conference organization needs.*
+## Legacy Code
+
+The `legacy/` directory contains the original v1.x implementation:
+
+- `session_organizer.py` — Original algorithmic engine (replaced by `smart/` package)
+- `session_creation_app_v2.py` — Tkinter desktop app (replaced by `apps/smart_app.py`)
+- `session_creation_viewer_web_app.py` — Original Streamlit viewer (replaced by `apps/session_viewer_app.py`)
+
+Legacy code is retained for reference and benchmark comparison. See [legacy/README.md](legacy/README.md).
+
+## License
+
+This project is developed for academic and conference organization purposes.

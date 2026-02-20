@@ -1,6 +1,9 @@
 # Windows
 Thumbs.db
 
+# macOS
+.DS_Store
+
 # Environments
 .env
 .venv
@@ -23,9 +26,17 @@ __pycache__/
 *.csv
 *.xlsx
 *.json
-*.parquet
+#*.parquet
 *.pkl
-*.crypt
+#*.crypt
+*.db
+
+# Output files
+/output/
+/exports/
+
+# Test fixtures (large embedding files)
+tests/fixtures/*.npz
 
 # Presentation Data
 df_presentations.pkl
@@ -35,3 +46,15 @@ dist/
 build/
 *.spec
 __pycache__/
+
+# =============================================================================
+# Deidentified example data — committed to the repository
+# =============================================================================
+# The extension-based rules above (*.db, *.xlsx, *.json) and the directory
+# rules (/exports/) would block these files. Negation rules below override
+# them so the examples/ directory is fully tracked.
+!examples/
+!examples/**
+!examples/**/*.db
+!examples/**/*.xlsx
+!examples/**/*.json

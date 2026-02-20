@@ -1,0 +1,87 @@
+{
+  "profile": "organizer_full",
+  "version": "20260220",
+  "exported_at": "2026-02-20T10:20:23.791643",
+  "files": {
+    "presentations": {
+      "output_path": "/Users/josephdvorak/Library/CloudStorage/OneDrive-UniversityofKentucky/Programming/AI/SMART/Session-Creation-Package/exports/20260220/presentations.parquet",
+      "format": "parquet",
+      "row_count": 1160,
+      "column_count": 33,
+      "columns": [
+        "abstract_id",
+        "is_invited",
+        "source_submission_id",
+        "source_abstract_id",
+        "slot_number",
+        "title",
+        "abstract",
+        "presenter_first_name",
+        "presenter_last_name",
+        "presenter_email",
+        "affiliation",
+        "technical_community",
+        "session_preference",
+        "Portal Key - Submission ID",
+        "Submission Created Date & Time",
+        "Submission Completed Date & Time",
+        "Submission Status",
+        "Acceptance Status",
+        "Owner-Company/University",
+        "Owner-City",
+        "Owner-State",
+        "Owner-Country",
+        "Oral or Poster",
+        "Selected Topic from Anticipated Session Topics",
+        "Technical Community-First Preference ",
+        "Technical Community-Second Preference ",
+        "Would like to be moved to oral if available",
+        "Session ID",
+        "Technical Community",
+        "Presenter: First Name",
+        "Presenter: Last Name",
+        "session_id",
+        "presentation_fit"
+      ]
+    },
+    "sessions": {
+      "output_path": "/Users/josephdvorak/Library/CloudStorage/OneDrive-UniversityofKentucky/Programming/AI/SMART/Session-Creation-Package/exports/20260220/sessions.parquet",
+      "format": "parquet",
+      "row_count": 97,
+      "columns": [
+        "session_id",
+        "title",
+        "title_options",
+        "keywords",
+        "session_coherence",
+        "session_distinctiveness",
+        "is_hybrid",
+        "placement_strategy",
+        "created_at",
+        "updated_at",
+        "extra_data",
+        "session_size",
+        "committee_1",
+        "committee_1_score",
+        "committee_2",
+        "committee_2_score",
+        "committee_3",
+        "committee_3_score"
+      ]
+    },
+    "pres_similarities": {
+      "output_path": "/Users/josephdvorak/Library/CloudStorage/OneDrive-UniversityofKentucky/Programming/AI/SMART/Session-Creation-Package/exports/20260220/pres_similarities.parquet",
+      "size": [
+        1160,
+        1160
+      ]
+    },
+    "session_similarities": {
+      "output_path": "/Users/josephdvorak/Library/CloudStorage/OneDrive-UniversityofKentucky/Programming/AI/SMART/Session-Creation-Package/exports/20260220/session_similarities.parquet",
+      "size": [
+        97,
+        97
+      ]
+    }
+  }
+}
